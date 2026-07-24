@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useApp, type FoodItem, todayIso } from "@/lib/store";
 import { MOCK_FOOD_DB, scaleFood } from "@/lib/mock-foods";
-import { Camera, Scale, Trash2, Plus, RefreshCw } from "lucide-react";
+import { Camera, Scale, Trash2, Plus, RefreshCw, Upload, X, Aperture } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
@@ -68,6 +68,90 @@ function LogFood() {
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Live webcam capture
+  const [cameraOn, setCameraOn] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setCameraOn(false);
+  };
+
+  const startCamera = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast.error("Camera not supported", {
+        description: "Your browser can't access a webcam. Upload an image instead.",
+      });
+      return;
+    }
+    setCameraStarting(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      // The <video> mounts on the next render; a useEffect attaches the
+      // stream once the element is actually in the DOM (see below).
+      setCameraOn(true);
+    } catch (error) {
+      const message =
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "Camera permission denied. Allow access or upload an image."
+          : "Could not start the camera. Try uploading an image instead.";
+      toast.error(message);
+    } finally {
+      setCameraStarting(false);
+    }
+  };
+
+  const capturePhoto = async () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) {
+      toast.error("Camera isn't ready yet — give it a second.");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      toast.error("Couldn't capture the frame. Try again.");
+      return;
+    }
+    const file = new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
+    stopCamera();
+    await captureImage(file);
+  };
+
+  // Attach the stream once the <video> element is mounted in the DOM.
+  // Doing this in an effect (rather than right after getUserMedia) avoids a
+  // race where the element hasn't rendered yet, which shows a black frame.
+  useEffect(() => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!cameraOn || !video || !stream) return;
+    video.srcObject = stream;
+    const play = () => void video.play().catch(() => undefined);
+    if (video.readyState >= 2) play();
+    else video.onloadedmetadata = play;
+    return () => {
+      video.onloadedmetadata = null;
+    };
+  }, [cameraOn]);
+
+  // Release the camera when leaving the page.
+  useEffect(() => stopCamera, []);
 
   const displayedWeight = Math.max(0, weight - tareOffset);
 
@@ -250,31 +334,74 @@ function LogFood() {
                   <RefreshCw className="h-10 w-10 animate-spin text-primary" />
                   <div className="mt-2 text-sm font-bold">Analyzing your plate…</div>
                 </>
+              ) : cameraOn ? (
+                <div className="w-full flex flex-col items-center">
+                  <div className="relative w-full overflow-hidden rounded-2xl bg-black">
+                    {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full max-h-[240px] object-contain"
+                    />
+                    <button
+                      onClick={stopCamera}
+                      aria-label="Close camera"
+                      className="absolute right-2 top-2 rounded-full bg-black/50 p-1.5 text-white bounce-tap"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <Button
+                      onClick={capturePhoto}
+                      className="rounded-full font-bold bounce-tap"
+                    >
+                      <Aperture className="mr-2 h-4 w-4" /> Capture photo
+                    </Button>
+                  </div>
+                </div>
               ) : (
                 <>
                   <Camera className="h-10 w-10 text-primary" />
                   <div className="mt-2 text-sm font-bold">Point at your plate</div>
-                  <div className="text-xs text-muted-foreground">Tap capture to detect foods</div>
+                  <div className="text-xs text-muted-foreground">
+                    Use your webcam or upload an image to detect foods
+                  </div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void captureImage(file);
+                    }}
+                  />
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    <Button
+                      onClick={startCamera}
+                      disabled={cameraStarting}
+                      className="rounded-full font-bold bounce-tap"
+                    >
+                      {cameraStarting ? (
+                        <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Camera className="mr-2 h-4 w-4" />
+                      )}
+                      {cameraStarting ? "Starting…" : "Open camera"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="rounded-full font-bold bounce-tap"
+                    >
+                      <Upload className="mr-2 h-4 w-4" /> Upload image
+                    </Button>
+                  </div>
                 </>
               )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="sr-only"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void captureImage(file);
-                }}
-              />
-              <Button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={scanning}
-                className="mt-4 rounded-full font-bold bounce-tap"
-              >
-                <Camera className="mr-2 h-4 w-4" /> Choose or capture image
-              </Button>
             </div>
 
             {/* Scale */}
