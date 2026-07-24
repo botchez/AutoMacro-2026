@@ -185,6 +185,10 @@ class CoachService:
         goals = self.connection.execute(
             "SELECT * FROM goals WHERE user_id = ?", (user_id,)
         ).fetchone()
+        preferences = self.connection.execute(
+            "SELECT activity, allergies FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
 
         totals_row = self.connection.execute(
             """
@@ -249,6 +253,8 @@ class CoachService:
                 "carbs": goals["carbs"],
                 "fat": goals["fat"],
                 "tolerance_pct": DEFAULT_TOLERANCE_PCT,
+                "dietary": goals["dietary"],
+                "allergies": preferences["allergies"] if preferences else "",
             }
         state.logs = logs
         state.current_batch = batch_items

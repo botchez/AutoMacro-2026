@@ -39,6 +39,21 @@ CREATE TABLE IF NOT EXISTS goals (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    sex TEXT NOT NULL DEFAULT 'prefer-not'
+        CHECK (sex IN ('female', 'male', 'other', 'prefer-not')),
+    age INTEGER,
+    height REAL,
+    weight REAL,
+    activity TEXT NOT NULL DEFAULT 'moderate'
+        CHECK (activity IN ('low', 'light', 'moderate', 'high')),
+    allergies TEXT NOT NULL DEFAULT '',
+    week_starts_on TEXT NOT NULL DEFAULT 'monday'
+        CHECK (week_starts_on IN ('monday', 'sunday')),
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS meals (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

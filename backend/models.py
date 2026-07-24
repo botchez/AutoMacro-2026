@@ -39,6 +39,33 @@ class GoalsIn(ApiModel):
     units: Literal["metric", "imperial"]
 
 
+class SettingsIn(GoalsIn):
+    name: str = Field(min_length=1, max_length=80)
+    email: EmailStr
+    sex: Literal["female", "male", "other", "prefer-not"] = "prefer-not"
+    age: int | None = Field(default=None, ge=16, le=120)
+    height: float | None = Field(default=None, gt=0, le=300)
+    weight: float | None = Field(default=None, gt=0, le=1_500)
+    activity: Literal["low", "light", "moderate", "high"] = "moderate"
+    allergies: str = Field(default="", max_length=500)
+    weekStartsOn: Literal["monday", "sunday"] = "monday"
+
+
+class SettingsOut(SettingsIn):
+    pass
+
+
+class SettingsUpdateOut(ApiModel):
+    user: UserOut
+    goals: GoalsIn
+    settings: SettingsOut
+
+
+class PasswordChangeIn(ApiModel):
+    currentPassword: str = Field(min_length=8, max_length=128)
+    newPassword: str = Field(min_length=8, max_length=128)
+
+
 class FoodItemIn(ApiModel):
     id: str | None = None
     name: str = Field(min_length=1, max_length=200)

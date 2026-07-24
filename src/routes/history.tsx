@@ -58,7 +58,7 @@ export const Route = createFileRoute("/history")({
 });
 
 function HistoryPage() {
-  const { user, goals, logs, ready, updateMeal, deleteMeal } = useApp();
+  const { user, goals, settings, logs, ready, updateMeal, deleteMeal } = useApp();
   const navigate = useNavigate();
 
   const [selectedDate, setSelectedDate] = useState<Date>(() => new Date(`${todayIso()}T12:00:00`));
@@ -70,10 +70,12 @@ function HistoryPage() {
 
   // Search tab states (PRESERVED & ENHANCED FOOD HISTORY)
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchFilter, setSearchFilter] = useState<"all" | "high-protein" | "high-carb" | "high-cal">("all");
-  const [historySort, setHistorySort] = useState<
-    "newest" | "oldest" | "calories" | "protein"
-  >("newest");
+  const [searchFilter, setSearchFilter] = useState<
+    "all" | "high-protein" | "high-carb" | "high-cal"
+  >("all");
+  const [historySort, setHistorySort] = useState<"newest" | "oldest" | "calories" | "protein">(
+    "newest",
+  );
 
   useEffect(() => {
     if (!ready) return;
@@ -335,6 +337,7 @@ function HistoryPage() {
 
                   <Calendar
                     mode="single"
+                    weekStartsOn={settings?.weekStartsOn === "sunday" ? 0 : 1}
                     selected={selectedDate}
                     onSelect={(date) => {
                       if (!date) return;
@@ -386,7 +389,9 @@ function HistoryPage() {
                 {/* Day Summary Card */}
                 <div className="card-soft p-4 bg-gradient-to-br from-primary/5 via-primary/10 to-transparent">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-muted-foreground">Target Compliance</span>
+                    <span className="text-xs font-bold text-muted-foreground">
+                      Target Compliance
+                    </span>
                     <span className="text-xs font-extrabold text-primary">
                       {selectedHitCount}/4 Targets Hit
                     </span>
@@ -443,7 +448,8 @@ function HistoryPage() {
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-base font-extrabold">Macro Rings Progress</h3>
                       <span className="text-xs font-bold text-muted-foreground">
-                        {Math.round((selectedTotals.calories / goals.calories) * 100)}% of daily goal
+                        {Math.round((selectedTotals.calories / goals.calories) * 100)}% of daily
+                        goal
                       </span>
                     </div>
 
@@ -569,7 +575,8 @@ function HistoryPage() {
                                   </span>
                                   <span>·</span>
                                   <span>
-                                    P: {round(mealTotals.protein)}g | C: {round(mealTotals.carbs)}g | F: {round(mealTotals.fat)}g
+                                    P: {round(mealTotals.protein)}g | C: {round(mealTotals.carbs)}g
+                                    | F: {round(mealTotals.fat)}g
                                   </span>
                                 </div>
                               </div>
@@ -606,7 +613,8 @@ function HistoryPage() {
                                           <div>
                                             <div className="font-bold">{item.name}</div>
                                             <div className="text-xs text-muted-foreground">
-                                              {Math.round(item.grams)}g · P: {round(item.protein)}g | C: {round(item.carbs)}g | F: {round(item.fat)}g
+                                              {Math.round(item.grams)}g · P: {round(item.protein)}g
+                                              | C: {round(item.carbs)}g | F: {round(item.fat)}g
                                             </div>
                                           </div>
                                           <div className="text-xs font-extrabold text-foreground">
@@ -684,7 +692,8 @@ function HistoryPage() {
                   <h2 className="text-xl font-black">Food History & Search Catalog</h2>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Search across all historical food entries you've ever logged with instant macro filtering.
+                  Search across all historical food entries you've ever logged with instant macro
+                  filtering.
                 </p>
               </div>
 
@@ -814,15 +823,30 @@ function HistoryPage() {
                             <span>·</span>
                             <span>{formatTime(item.mealTime)}</span>
                             <span>·</span>
-                            <span className="font-semibold">{Math.round(item.food.grams)}g portion</span>
+                            <span className="font-semibold">
+                              {Math.round(item.food.grams)}g portion
+                            </span>
                           </div>
                         </div>
 
                         <div className="flex items-center justify-between sm:justify-end gap-4 border-t sm:border-t-0 pt-2 sm:pt-0">
                           <div className="text-left sm:text-right">
-                            <div className="text-sm font-black">{Math.round(item.food.calories)} kcal</div>
+                            <div className="text-sm font-black">
+                              {Math.round(item.food.calories)} kcal
+                            </div>
                             <div className="text-[11px] text-muted-foreground">
-                              P: <span className="font-bold text-amber-600">{round(item.food.protein)}g</span> | C: <span className="font-bold text-blue-600">{round(item.food.carbs)}g</span> | F: <span className="font-bold text-rose-600">{round(item.food.fat)}g</span>
+                              P:{" "}
+                              <span className="font-bold text-amber-600">
+                                {round(item.food.protein)}g
+                              </span>{" "}
+                              | C:{" "}
+                              <span className="font-bold text-blue-600">
+                                {round(item.food.carbs)}g
+                              </span>{" "}
+                              | F:{" "}
+                              <span className="font-bold text-rose-600">
+                                {round(item.food.fat)}g
+                              </span>
                             </div>
                           </div>
                           <Button
@@ -863,9 +887,13 @@ function HistoryPage() {
       >
         <AlertDialogContent className="rounded-3xl">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-lg font-black">Delete this meal log?</AlertDialogTitle>
+            <AlertDialogTitle className="text-lg font-black">
+              Delete this meal log?
+            </AlertDialogTitle>
             <AlertDialogDescription className="text-sm text-muted-foreground">
-              This will permanently delete the meal logged at {deleteTarget ? formatTime(deleteTarget.time) : ""} ({deleteTarget?.items.length} items) from your history.
+              This will permanently delete the meal logged at{" "}
+              {deleteTarget ? formatTime(deleteTarget.time) : ""} ({deleteTarget?.items.length}{" "}
+              items) from your history.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -886,7 +914,9 @@ function HistoryPage() {
   );
 }
 
-{/* Helper Components */}
+{
+  /* Helper Components */
+}
 
 function HistoryInsight({ label, value }: { label: string; value: string }) {
   return (
@@ -957,11 +987,17 @@ function MacroProgressRow({
         </div>
         <div>
           <span className="font-extrabold text-foreground">{Math.round(value)}</span>
-          <span className="text-muted-foreground"> / {Math.round(goal)} {unit}</span>
+          <span className="text-muted-foreground">
+            {" "}
+            / {Math.round(goal)} {unit}
+          </span>
         </div>
       </div>
       <div className="h-2 rounded-full bg-muted overflow-hidden">
-        <div className={cn("h-full rounded-full transition-all duration-500", color)} style={{ width: `${percent}%` }} />
+        <div
+          className={cn("h-full rounded-full transition-all duration-500", color)}
+          style={{ width: `${percent}%` }}
+        />
       </div>
     </div>
   );

@@ -84,12 +84,13 @@ async function grabFrame(video: HTMLVideoElement, maxEdge = 1024): Promise<Blob 
 }
 
 function LogFood() {
-  const { user, goals, addMeal, updateMeal, deleteMeal, logs, ready } = useApp();
+  const { user, goals, settings, addMeal, updateMeal, deleteMeal, logs, ready } = useApp();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialDate = useMemo(() => parseIsoDate(todayIso()), []);
   const [selectedDate, setSelectedDate] = useState(todayIso());
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(initialDate));
+  const weekStartsOn = settings?.weekStartsOn ?? "monday";
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(initialDate, weekStartsOn));
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [mealHour, setMealHour] = useState(new Date().getHours().toString().padStart(2, "0"));
@@ -137,6 +138,10 @@ function LogFood() {
     const interval = window.setInterval(() => setCurrentTime(new Date()), 30_000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setWeekStart(startOfWeek(parseIsoDate(selectedDate), weekStartsOn));
+  }, [selectedDate, weekStartsOn]);
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -244,14 +249,14 @@ function LogFood() {
 
   const chooseDate = (date: Date) => {
     setSelectedDate(toIsoDate(date));
-    setWeekStart(startOfWeek(date));
+    setWeekStart(startOfWeek(date, weekStartsOn));
     setCalendarOpen(false);
   };
 
   const shiftWeek = (days: number) => {
     const nextDate = addDays(parseIsoDate(selectedDate), days);
     setSelectedDate(toIsoDate(nextDate));
-    setWeekStart(startOfWeek(nextDate));
+    setWeekStart(startOfWeek(nextDate, weekStartsOn));
   };
 
   const openLogEditor = (hour: number) => {
@@ -264,7 +269,7 @@ function LogFood() {
     const now = new Date();
     const today = todayIso();
     setSelectedDate(today);
-    setWeekStart(startOfWeek(parseIsoDate(today)));
+    setWeekStart(startOfWeek(parseIsoDate(today), weekStartsOn));
     setMealHour(now.getHours().toString().padStart(2, "0"));
     setMealMinute(now.getMinutes().toString().padStart(2, "0"));
     setEditorOpen(true);
@@ -496,6 +501,7 @@ function LogFood() {
           onNext={() => shiftWeek(7)}
           calendarOpen={calendarOpen}
           onCalendarOpenChange={setCalendarOpen}
+          weekStartsOn={weekStartsOn}
         />
 
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -610,7 +616,6 @@ function LogFood() {
                 {cameraOn ? (
                   <div className="relative z-10 flex w-full flex-col items-center">
                     <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-black">
-                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <video
                         ref={videoRef}
                         autoPlay
@@ -956,6 +961,7 @@ function WeekBar({
   onNext,
   calendarOpen,
   onCalendarOpenChange,
+  weekStartsOn,
 }: {
   days: Date[];
   selectedDate: string;
@@ -964,6 +970,7 @@ function WeekBar({
   onNext: () => void;
   calendarOpen: boolean;
   onCalendarOpenChange: (open: boolean) => void;
+  weekStartsOn: "monday" | "sunday";
 }) {
   return (
     <section className="relative rounded-2xl border bg-white p-2 shadow-sm">
@@ -1032,6 +1039,7 @@ function WeekBar({
             <Calendar
               mode="single"
               selected={parseIsoDate(selectedDate)}
+              weekStartsOn={weekStartsOn === "monday" ? 1 : 0}
               onSelect={(date) => {
                 if (date) onSelect(date);
               }}
@@ -1253,9 +1261,9 @@ function toIsoDate(date: Date) {
   return local.toISOString().slice(0, 10);
 }
 
-function startOfWeek(date: Date) {
+function startOfWeek(date: Date, weekStartsOn: "monday" | "sunday") {
   const start = new Date(date);
-  const offset = (start.getDay() + 6) % 7;
+  const offset = weekStartsOn === "monday" ? (start.getDay() + 6) % 7 : start.getDay();
   start.setDate(start.getDate() - offset);
   start.setHours(12, 0, 0, 0);
   return start;

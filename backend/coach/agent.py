@@ -69,7 +69,9 @@ do NOT call suggest_foods; the sidebar should stay empty.
 Rules: If within the tolerance band, affirm and STOP — do not suggest more. Do not \
 repeat a suggestion the user already acted on. Be supportive; never push \
 restriction, never shame, never treat "under" as an emergency. Prefer foods the \
-user actually eats. Keep it to 1-3 sentences. Write in plain conversational text — \
+user actually eats. Always respect the dietary and allergies fields returned by \
+get_target; never suggest a food that conflicts with either. Keep it to 1-3 \
+sentences. Write in plain conversational text — \
 no markdown, bold, bullet lists, or headers (the UI shows your reply as raw text)."""
 
 
@@ -101,7 +103,9 @@ concrete foods, do not call it.
 
 Be warm, specific, and concise (usually 1-3 sentences; a bit more only if they \
 asked for detail). Never push restriction, never shame, never treat "under" as an \
-emergency. If they ask something outside nutrition, answer briefly and steer back. \
+emergency. Always respect the dietary and allergies fields returned by get_target; \
+never suggest a food that conflicts with either. If they ask something outside \
+nutrition, answer briefly and steer back. \
 Write in plain conversational text — no markdown, bold, bullet lists, or headers \
 (the chat UI shows your reply as raw text)."""
 

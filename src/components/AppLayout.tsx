@@ -6,6 +6,7 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings2,
   Utensils,
   X,
 } from "lucide-react";
@@ -18,11 +19,12 @@ const nav = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/log-food", label: "Log Food", icon: Utensils },
   { to: "/history", label: "History", icon: History },
+  { to: "/settings", label: "Settings", icon: Settings2 },
 ] as const;
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const { logout, user } = useApp();
+  const { logout } = useApp();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(
@@ -120,12 +122,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <nav className="flex flex-col gap-1 mt-2">
           <NavItems compact={collapsed} />
         </nav>
-        {!collapsed && (
-          <div className="mt-auto rounded-2xl bg-sidebar-accent p-3 text-xs text-sidebar-accent-foreground">
-            <div className="font-bold">Hey {user?.name ?? "friend"}</div>
-            <div className="opacity-80 mt-1">Every log is a win. Let's crush today's goals!</div>
-          </div>
-        )}
       </aside>
 
       {/* Mobile top bar */}

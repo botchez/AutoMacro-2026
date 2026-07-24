@@ -15,7 +15,9 @@ os.environ["NUTRICOACH_FRONTEND_DIST"] = str(Path(TEST_DIR.name) / "dist")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.coach.agent import CoachResult  # noqa: E402
+from backend.db import connect  # noqa: E402
 from backend.main import app  # noqa: E402
+from backend.services.coach import CoachService  # noqa: E402
 
 # Stand-in settings so the coach's agent path is active without depending on a real
 # OPENROUTER_API_KEY / .env; run_coach is mocked, so nothing hits the network.
@@ -169,6 +171,72 @@ class ApiFlowTests(unittest.TestCase):
             data={"weight": "120"},
         )
         self.assertTrue(second.json()["cached"])
+
+    def test_settings_and_password_validation(self):
+        settings = {
+            "name": "Demo User",
+            "email": "demo@nutricoach.app",
+            "goalType": "maintain",
+            "calories": 2300,
+            "protein": 150,
+            "carbs": 265,
+            "fat": 70,
+            "dietary": "Pescatarian",
+            "units": "metric",
+            "sex": "prefer-not",
+            "age": 31,
+            "height": 171,
+            "weight": 69.5,
+            "activity": "moderate",
+            "allergies": "Peanuts",
+            "weekStartsOn": "sunday",
+        }
+        response = self.client.put(
+            "/api/settings", headers=self.headers, json=settings
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["user"]["name"], "Demo User")
+        self.assertEqual(response.json()["settings"]["protein"], 150)
+        self.assertEqual(response.json()["settings"]["weekStartsOn"], "sunday")
+
+        state = self.client.get("/api/state", headers=self.headers).json()
+        self.assertEqual(state["settings"]["allergies"], "Peanuts")
+        self.assertEqual(state["goals"]["calories"], 2300)
+        connection = connect()
+        try:
+            coach_state = CoachService(connection)._build_state(state["user"]["id"])
+        finally:
+            connection.close()
+        self.assertEqual(coach_state.target["dietary"], "Pescatarian")
+        self.assertEqual(coach_state.target["allergies"], "Peanuts")
+
+        rejected = self.client.put(
+            "/api/account/password",
+            headers=self.headers,
+            json={
+                "currentPassword": "wrongpass",
+                "newPassword": "a-different-password",
+            },
+        )
+        self.assertEqual(rejected.status_code, 400)
+        changed = self.client.put(
+            "/api/account/password",
+            headers=self.headers,
+            json={
+                "currentPassword": "demo1234",
+                "newPassword": "demo5678",
+            },
+        )
+        self.assertEqual(changed.status_code, 204)
+        restored = self.client.put(
+            "/api/account/password",
+            headers=self.headers,
+            json={
+                "currentPassword": "demo5678",
+                "newPassword": "demo1234",
+            },
+        )
+        self.assertEqual(restored.status_code, 204)
 
 
 if __name__ == "__main__":

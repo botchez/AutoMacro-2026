@@ -150,7 +150,8 @@ TOOL_SCHEMAS = [
           "submitted): kcal, protein, carbs, fat."),
     _tool("get_target",
           "The user's daily target for kcal/protein/carbs/fat plus tolerance_pct, "
-          "the +/- percent band that counts as 'close enough'."),
+          "the +/- percent band that counts as 'close enough', and any dietary "
+          "preference or food allergies that recommendations must respect."),
     _tool("get_recent_logs",
           "The last n logged food items today, newest last. Use to spot what the "
           "user just added.",

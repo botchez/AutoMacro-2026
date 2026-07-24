@@ -53,7 +53,7 @@ const activityOptions: Array<{
 ];
 
 function Onboarding() {
-  const { user, setGoals, goals, ready } = useApp();
+  const { user, updateSettings, settings, goals, ready } = useApp();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -93,7 +93,20 @@ function Onboarding() {
     if (!targets) return;
     setSaving(true);
     try {
-      await setGoals(targets);
+      if (!user) return;
+      await updateSettings({
+        ...targets,
+        name: user.name,
+        email: user.email,
+        sex: profile.sex,
+        age: profile.age,
+        height: profile.height,
+        weight: profile.weight,
+        activity: profile.activity,
+        dietary: profile.dietary,
+        allergies: settings?.allergies ?? "",
+        weekStartsOn: settings?.weekStartsOn ?? "monday",
+      });
       toast.success("Your nutrition plan is ready");
       navigate({ to: "/dashboard" });
     } catch (error) {
