@@ -37,3 +37,4 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+foodfacts_cache.sqlite
