@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useApp, type FoodItem, todayIso } from "@/lib/store";
 import { MOCK_FOOD_DB, scaleFood } from "@/lib/mock-foods";
-import { Camera, Scale, Trash2, Plus, RefreshCw, Upload, X, Aperture } from "lucide-react";
+import { Camera, Scale, Trash2, Plus, RefreshCw, Upload, X, Aperture, Usb, Unplug } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { useScale } from "@/hooks/use-scale";
 
 export const Route = createFileRoute("/log-food")({
   head: () => ({
@@ -61,9 +62,12 @@ function LogFood() {
     return arr;
   }, []);
 
-  // Scanner mock state
-  const [weight, setWeight] = useState(0);
+  // Scale — live reading from the physical HX711 food scale over Web Serial,
+  // with a mock fallback so the demo still works without hardware plugged in.
+  const scale = useScale();
+  const [mockWeight, setMockWeight] = useState(0);
   const [tareOffset, setTareOffset] = useState(0);
+  const [capturedWeight, setCapturedWeight] = useState<number | null>(null);
   const [scanning, setScanning] = useState(false);
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
@@ -153,15 +157,45 @@ function LogFood() {
   // Release the camera when leaving the page.
   useEffect(() => stopCamera, []);
 
-  const displayedWeight = Math.max(0, weight - tareOffset);
+  // Live reading: hardware weight (already hardware-tared) when a scale is
+  // connected, otherwise the mock value. `tareOffset` is a software fallback
+  // for demo mode; `capturedWeight` freezes a reading for the analysis call.
+  const liveWeight = Math.max(0, (scale.connected ? (scale.weight ?? 0) : mockWeight) - tareOffset);
+  const displayedWeight = capturedWeight ?? liveWeight;
+
+  const connectScale = async () => {
+    if (!scale.supported) {
+      toast.error("Web Serial not supported", {
+        description: "Use Chrome or Edge to connect the food scale.",
+      });
+      return;
+    }
+    const ok = await scale.connect();
+    if (ok) {
+      toast.success("Scale connected!", { description: "Live weight is streaming in." });
+    }
+  };
 
   const captureWeight = () => {
-    // random plausible weight 40–400g
-    setWeight(Math.round(40 + Math.random() * 360));
-    toast.success("Weight captured!", { description: "Scale reading locked in." });
+    if (scale.connected) {
+      setCapturedWeight(liveWeight);
+      toast.success("Weight captured!", { description: `Locked in ${liveWeight}g from the scale.` });
+      return;
+    }
+    // No hardware — fall back to a plausible random weight so the demo works.
+    const w = Math.round(40 + Math.random() * 360);
+    setMockWeight(w);
+    setCapturedWeight(Math.max(0, w - tareOffset));
+    toast.success("Weight captured!", { description: "Scale reading locked in (demo mode)." });
   };
-  const tare = () => {
-    setTareOffset(weight);
+
+  const tare = async () => {
+    setCapturedWeight(null);
+    if (scale.connected) {
+      await scale.tare(); // zero the load cell on the hardware
+    } else {
+      setTareOffset(mockWeight);
+    }
     toast("Scale tared to 0g");
   };
   const captureImage = async (file: File) => {
@@ -207,7 +241,8 @@ function LogFood() {
   const addDetectedToBatch = () => {
     setBatch((b) => [...b, ...detected]);
     setDetected([]);
-    setWeight(0);
+    setCapturedWeight(null);
+    setMockWeight(0);
     setTareOffset(0);
     toast.success("Added to batch");
   };
@@ -411,14 +446,47 @@ function LogFood() {
                 {displayedWeight}
                 <span className="text-xl text-muted-foreground">g</span>
               </div>
-              <div className="text-xs text-muted-foreground">Live scale reading</div>
-              <div className="mt-4 flex gap-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span
+                  className={cn(
+                    "inline-block h-2 w-2 rounded-full",
+                    scale.connected ? "bg-green-500 animate-pulse" : "bg-muted-foreground/40",
+                  )}
+                />
+                {scale.connected
+                  ? capturedWeight !== null
+                    ? "Reading locked"
+                    : "Live scale reading"
+                  : "Demo mode — scale not connected"}
+              </div>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
                 <Button variant="outline" onClick={tare} className="rounded-full bounce-tap">
                   Tare
                 </Button>
                 <Button onClick={captureWeight} className="rounded-full font-bold bounce-tap">
                   Capture Weight
                 </Button>
+              </div>
+              <div className="mt-2">
+                {scale.connected ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void scale.disconnect()}
+                    className="rounded-full text-xs bounce-tap"
+                  >
+                    <Unplug className="mr-1 h-3.5 w-3.5" /> Disconnect
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void connectScale()}
+                    className="rounded-full text-xs bounce-tap"
+                  >
+                    <Usb className="mr-1 h-3.5 w-3.5" /> Connect scale
+                  </Button>
+                )}
               </div>
             </div>
           </div>
