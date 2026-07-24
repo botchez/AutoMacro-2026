@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { api } from "@/lib/api";
+import { api, type DetectedItem } from "@/lib/api";
 import { useScale } from "@/hooks/use-scale";
 import { MOCK_FOOD_DB, scaleFood } from "@/lib/mock-foods";
 import {
@@ -77,14 +77,95 @@ const MIN_CAPTURE_G = 5;
 const SETTLE_RETAIN_MS = 2000;
 const SETTLE_SAMPLE_MS = 80; // how often the auto loop samples the live weight
 const DEFAULT_SERVING_G = 30; // fallback serving size when the label/OFF has none
+// When there's no scale reading to apply (e.g. a plain photo upload with no hardware),
+// we still need a total weight to turn the model's per-100g + fraction ratios into
+// concrete macros. This nominal total is what the backend used to assume; now the math
+// lives here on the client, the assumption does too — the user can re-weigh to correct it.
+const FALLBACK_TOTAL_G = 180;
 
-// A detected food carries its per-100g density and (for packaged foods) a serving
-// size, so we can re-price it by serving or by a fresh weight after capture.
+// A detected food carries its per-100g density and fraction (its share of the plate) so
+// it can be re-priced at any weight, plus the source its nutrition came from and (for
+// packaged foods) a serving size.
 type DetectedFood = FoodItem & {
   confidence?: number;
-  per100?: Macros;
+  per100: Macros;
+  fraction: number;
   servingGrams?: number | null;
 };
+
+// Turn the weight-independent detections from the API (per-100g density + fraction) into
+// concrete foods at a given total weight — THIS is the "math on the frontend": grams =
+// fraction × totalGrams, macros = per100 × grams / 100. The source is carried through so
+// the UI can always show where each number came from.
+function materialize(items: DetectedItem[], totalGrams: number): DetectedFood[] {
+  return items.map((it) => {
+    const grams = Math.max(1, Math.round(it.fraction * totalGrams));
+    const factor = grams / 100;
+    return {
+      id: uid(),
+      name: it.name,
+      grams,
+      calories: Math.round(it.per100.calories * factor),
+      protein: round(it.per100.protein * factor),
+      carbs: round(it.per100.carbs * factor),
+      fat: round(it.per100.fat * factor),
+      fdcId: it.fdcId ?? null,
+      source: it.source,
+      confidence: it.confidence,
+      per100: it.per100,
+      fraction: it.fraction,
+      servingGrams: it.servingGrams ?? null,
+    };
+  });
+}
+
+// Human-readable provenance for a food's macros, so the UI can state plainly where the
+// numbers came from. `tone` drives the badge colour — an AI estimate (the last-resort
+// fallback) is flagged amber so it's obviously less trustworthy than a database hit.
+function sourceMeta(source?: string | null): {
+  label: string;
+  tone: "db" | "label" | "estimate" | "manual";
+} {
+  switch (source) {
+    case "openfoodfacts":
+      return { label: "Open Food Facts", tone: "db" };
+    case "barcode":
+      return { label: "Barcode · Open Food Facts", tone: "db" };
+    case "usda-fdc":
+      return { label: "USDA FoodData Central", tone: "db" };
+    case "label":
+      return { label: "Nutrition label", tone: "label" };
+    case "estimate":
+      return { label: "AI estimate", tone: "estimate" };
+    case "reference":
+      return { label: "Offline reference", tone: "estimate" };
+    case "manual":
+      return { label: "Manual entry", tone: "manual" };
+    default:
+      return { label: source ? source : "Detected", tone: "manual" };
+  }
+}
+
+const SOURCE_TONE_CLASS: Record<ReturnType<typeof sourceMeta>["tone"], string> = {
+  db: "bg-green-100 text-green-700",
+  label: "bg-sky-100 text-sky-700",
+  estimate: "bg-amber-100 text-amber-700",
+  manual: "bg-muted text-muted-foreground",
+};
+
+function SourceBadge({ source }: { source?: string | null }) {
+  const { label, tone } = sourceMeta(source);
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold",
+        SOURCE_TONE_CLASS[tone],
+      )}
+    >
+      {label}
+    </span>
+  );
+}
 
 // A capture paused for the user to choose a portion. The trigger weight is only
 // used as the basis for scaling; the logged amount comes from the user's choice.
@@ -480,18 +561,19 @@ function LogFood() {
     toast.success("Weight captured", { description: `${liveWeight}g will guide detection.` });
   };
 
-  // Run the food-vision cascade on a frame and return the detected foods (with
-  // fresh ids), or null on error. Shared by manual capture and the auto loop.
-  const analyzeImage = async (file: File, grams: number): Promise<DetectedFood[] | null> => {
+  // Run the food-vision cascade on a frame and return the raw weight-independent
+  // detections (per-100g + fraction), or null on error. No weight is sent — the caller
+  // applies a total weight via materialize(). Shared by manual capture and the auto loop.
+  const analyzeImage = async (file: File): Promise<DetectedItem[] | null> => {
     if (imagePreview) URL.revokeObjectURL(imagePreview);
     setImagePreview(URL.createObjectURL(file));
     setScanning(true);
     try {
       // The server cascade decodes any barcode in the frame (pyzbar) before the model,
       // so a captured/uploaded barcode photo already resolves to the exact product.
-      const result = await api.analyze(file, grams);
+      const result = await api.analyze(file);
       setVisionProvider(result.provider);
-      return result.items.map((item) => ({ ...item, id: uid() }));
+      return result.items;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not analyze that image");
       return null;
@@ -501,9 +583,17 @@ function LogFood() {
     }
   };
 
+  // The total weight to price a manual capture at: the captured/live scale reading when
+  // there is one, else the nominal fallback (the user can re-weigh to correct it).
+  const captureTotalGrams = () => {
+    const w = capturedWeight || displayedWeight;
+    return w > 0 ? w : FALLBACK_TOTAL_G;
+  };
+
   const captureImage = async (file: File) => {
-    const items = await analyzeImage(file, capturedWeight || displayedWeight);
-    if (!items) return;
+    const raw = await analyzeImage(file);
+    if (!raw) return;
+    const items = materialize(raw, captureTotalGrams());
     setDetected(items);
     toast.success(`Found ${items.length} food${items.length === 1 ? "" : "s"}`, {
       description: "Review portions before adding them to the meal.",
@@ -586,16 +676,18 @@ function LogFood() {
         setAwaitingRemoval(true);
         return;
       }
-      const items = await analyzeImage(file, grams);
-      if (!items || !items.length) {
+      const raw = await analyzeImage(file);
+      if (!raw || !raw.length) {
         toast.error("No food detected — remove the item and try again.");
         rearmNeededRef.current = true;
         readingsRef.current = [];
         setAwaitingRemoval(true);
         return;
       }
-      const triggerGrams = items.reduce((sum, it) => sum + it.grams, 0) || grams;
-      const servingGrams = items.find((it) => it.servingGrams != null)?.servingGrams ?? null;
+      // The settled scale reading IS the total weight; price the detections at it here.
+      const items = materialize(raw, grams);
+      const triggerGrams = grams;
+      const servingGrams = raw.find((it) => it.servingGrams != null)?.servingGrams ?? null;
       setPendingCapture({ items, triggerGrams, servingGrams });
       setServingSize(String(servingGrams ?? DEFAULT_SERVING_G));
       setServingCount("1");
@@ -731,11 +823,13 @@ function LogFood() {
         try {
           const frame = await grabFrame(video);
           if (!cancelled && frame) {
-            const res = await api.scanBarcodeFrame(frame, weightRef.current);
+            const res = await api.scanBarcodeFrame(frame);
             if (cancelled) return;
             if (res.status === "matched" && res.result) {
               stopCamera(); // flips cameraOn -> this effect's cleanup halts the loop
-              const items = res.result.items.map((item) => ({ ...item, id: uid() }));
+              // Price the matched product at the live scale weight (or the fallback).
+              const total = weightRef.current > 0 ? weightRef.current : FALLBACK_TOTAL_G;
+              const items = materialize(res.result.items, total);
               setDetected(items);
               setVisionProvider(res.result.provider);
               toast.success(`Barcode matched: ${items[0]?.name ?? res.barcode}`, {
@@ -1301,9 +1395,15 @@ function LogFood() {
                       <h3 className="mt-0.5 truncate text-lg font-black">
                         {pendingCapture.items.map((it) => it.name).join(", ")}
                       </h3>
-                      <div className="text-xs text-muted-foreground">
-                        {pendingCapture.items[0]?.source ?? "detected"} · captured at{" "}
-                        {Math.round(pendingCapture.triggerGrams)}g
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {[...new Set(pendingCapture.items.map((it) => it.source ?? ""))].map(
+                          (src) => (
+                            <SourceBadge key={src} source={src} />
+                          ),
+                        )}
+                        <span className="text-xs text-muted-foreground">
+                          · captured at {Math.round(pendingCapture.triggerGrams)}g
+                        </span>
                       </div>
                     </div>
                     <button
@@ -1701,7 +1801,10 @@ function TimelineRow({
                   {meal.items.map((item) => (
                     <div key={item.id} className="flex items-center gap-2 px-3 py-2">
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-extrabold">{item.name}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-sm font-extrabold">{item.name}</span>
+                          <SourceBadge source={item.source} />
+                        </div>
                         <div className="text-[11px] text-muted-foreground">
                           {Math.round(item.grams)}g · {Math.round(item.calories)} kcal · P{" "}
                           {round(item.protein)} · C {round(item.carbs)} · F {round(item.fat)}
@@ -1766,6 +1869,9 @@ function FoodRows({
             <div className="text-[11px] text-muted-foreground">
               {Math.round(item.calories)} kcal · P {round(item.protein)} · C {round(item.carbs)} · F{" "}
               {round(item.fat)}
+            </div>
+            <div className="mt-1">
+              <SourceBadge source={item.source} />
             </div>
           </div>
           <div className="relative">

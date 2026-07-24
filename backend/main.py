@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -497,10 +497,12 @@ def delete_log(
 @app.post("/api/vision/analyze", response_model=VisionOut)
 async def analyze_vision(
     image: UploadFile = File(...),
-    weight: float | None = Form(default=None),
     _: sqlite3.Row = Depends(current_user),
     connection: sqlite3.Connection = Depends(db_connection),
 ):
+    # No `weight` is accepted: the model is never told the scale weight and the backend
+    # does no weight math. The response is per-100g + fraction; the client applies the
+    # live scale weight itself.
     if image.content_type and not image.content_type.startswith("image/"):
         raise HTTPException(status_code=415, detail="Upload must be an image")
     image_bytes = await image.read()
@@ -513,20 +515,20 @@ async def analyze_vision(
             image_bytes,
             image.filename or "meal.jpg",
             image.content_type,
-            weight,
         )
 
 
 @app.post("/api/vision/barcode/scan")
 async def scan_barcode_frame(
     image: UploadFile = File(...),
-    weight: float | None = Form(default=None),
     _: sqlite3.Row = Depends(current_user),
     connection: sqlite3.Connection = Depends(db_connection),
 ):
     """Decode a barcode out of a single live-camera frame and price it off Open Food
     Facts. Polled by the client while the camera is on, so it stays quiet: 200 with a
     `status` discriminator (none / unmatched / matched) rather than 404s every tick.
+    The matched product is weight-independent (per-100g + fraction); the client applies
+    the scale weight.
     """
     image_bytes = await image.read()
     if not image_bytes:
@@ -538,7 +540,7 @@ async def scan_barcode_frame(
     if not code:
         return {"status": "none", "barcode": None, "result": None}
     with connection:
-        result = await cascade.lookup_barcode(code, weight)
+        result = await cascade.lookup_barcode(code)
     if result is None:
         return {"status": "unmatched", "barcode": code, "result": None}
     return {"status": "matched", "barcode": code, "result": result}

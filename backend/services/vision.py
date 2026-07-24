@@ -5,12 +5,14 @@ The real work lives in the validated cascade (`backend/vision/identify.py`): bar
 a plate into components, each priced from the most authoritative source (label OCR /
 Open Food Facts / USDA FDC / a flagged model estimate).
 
-This adapter keeps the existing HTTP contract intact — it flattens the cascade's rich
-per-component result into the flat `{items, provider, cached}` payload the frontend
-already speaks, preserves the sha256+weight `vision_cache`, and degrades to a
-deterministic filename fallback whenever the model stage is unavailable (no
-OPENROUTER_API_KEY, a missing optional dep, or an upstream error) so the demo never
-hard-fails.
+This adapter flattens the cascade's rich per-component result into the flat
+`{items, provider, cached}` payload the frontend speaks. Each item is weight-independent:
+a per-100g density (`per100`) plus a `fraction` (its share of the plate by mass) and the
+`source` the numbers came from — the client multiplies `fraction * scale_weight` to get
+grams and prices it off `per100`, so no scale weight is ever sent to the model or baked
+into the backend's numbers. Results are cached by image sha256 alone (weight-independent)
+and degrade to a deterministic filename fallback whenever the model stage is unavailable
+(no OPENROUTER_API_KEY, a missing optional dep, or an upstream error).
 """
 
 from __future__ import annotations
@@ -19,17 +21,12 @@ import hashlib
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
 
 from starlette.concurrency import run_in_threadpool
 
 from ..config import settings
 from ..db import utc_now
 from .fdc import REFERENCE_FOODS
-
-# When no scale weight is supplied we still owe the frontend absolute macros, so we
-# price the item against a nominal total (overridden the instant a real weight lands).
-DEFAULT_TOTAL_GRAMS = 180.0
 
 # The cascade tags every component with where its macros came from; map that to a
 # confidence the UI can show. Authoritative sources rank high; a model estimate low.
@@ -53,22 +50,17 @@ _SOURCE_LABEL = {
 }
 
 
-@dataclass
-class DetectedFood:
-    name: str
-    grams: float
-    confidence: float
-
-
 class VisionCascade:
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
 
     async def analyze(
-        self, image: bytes, filename: str, content_type: str | None, weight: float | None
+        self, image: bytes, filename: str, content_type: str | None
     ) -> dict:
-        image_digest = hashlib.sha256(image).hexdigest()
-        digest = f"{image_digest}:{round(weight or 0, 1)}"
+        # The result is weight-independent now (per-100g + fraction; the client does the
+        # weight math), so the cache key is the image alone — the same photo yields the
+        # same ratios regardless of what the scale reads.
+        digest = hashlib.sha256(image).hexdigest()
         cached = self.connection.execute(
             "SELECT payload_json FROM vision_cache WHERE image_sha256 = ?",
             (digest,),
@@ -78,14 +70,13 @@ class VisionCascade:
             payload["cached"] = True
             return payload
 
-        weight_g = weight if weight and weight > 0 else None
         # The cascade is synchronous (and may block on model/HTTP calls with retries),
         # so run it off the event loop.
         items, provider = await run_in_threadpool(
-            self._run_cascade, image, filename, content_type, weight_g
+            self._run_cascade, image, filename, content_type
         )
         if not items:  # cascade produced nothing usable -> deterministic fallback
-            items = self._filename_fallback(filename, image_digest, weight_g)
+            items = self._filename_fallback(filename, digest)
             provider = "filename-fallback"
 
         payload = {"items": items, "provider": provider, "cached": False}
@@ -101,15 +92,15 @@ class VisionCascade:
 
     # --- direct barcode lookup (client decoded it; skip the model entirely) -------
 
-    async def lookup_barcode(self, barcode: str, weight: float | None) -> dict | None:
+    async def lookup_barcode(self, barcode: str) -> dict | None:
         """Price a client-decoded barcode straight off Open Food Facts.
 
         Returns the flat {items, provider, cached} payload, or None when the product
         isn't in Open Food Facts (or the lookup is unavailable) so the caller can fall
-        back to a normal photo capture. No model call, no image upload.
+        back to a normal photo capture. No model call, no image upload. The item is
+        weight-independent (per-100g + fraction 1.0); the client applies the scale weight.
         """
-        weight_g = weight if weight and weight > 0 else None
-        digest = f"barcode:{barcode}:{round(weight or 0, 1)}"
+        digest = f"barcode:{barcode}"
         cached = self.connection.execute(
             "SELECT payload_json FROM vision_cache WHERE image_sha256 = ?",
             (digest,),
@@ -124,19 +115,17 @@ class VisionCascade:
         if off is None:
             return None
 
-        grams = weight_g if weight_g is not None else DEFAULT_TOTAL_GRAMS
-        macros = off.get("macros_per_100g") or {}
-        factor = grams / 100
+        serving_grams = off.get("serving_grams")
         item = {
             "name": off.get("food_name") or f"Barcode {barcode}",
-            "grams": round(grams, 1),
-            "calories": round((macros.get("kcal") or 0.0) * factor),
-            "protein": round((macros.get("protein") or 0.0) * factor, 1),
-            "carbs": round((macros.get("carbs") or 0.0) * factor, 1),
-            "fat": round((macros.get("fat") or 0.0) * factor, 1),
+            "fraction": 1.0,
+            "per100": self._per100(off.get("macros_per_100g")),
             "confidence": _SOURCE_CONFIDENCE["barcode"],
             "fdcId": barcode,
             "source": _SOURCE_LABEL["barcode"],
+            "servingGrams": (
+                round(float(serving_grams), 1) if serving_grams is not None else None
+            ),
         }
         payload = {"items": [item], "provider": "barcode/openfoodfacts", "cached": False}
         self.connection.execute(
@@ -148,6 +137,19 @@ class VisionCascade:
             (digest, json.dumps(payload), "barcode/openfoodfacts", utc_now()),
         )
         return payload
+
+    @staticmethod
+    def _per100(macros: dict | None) -> dict:
+        """Uniform per-100g macro payload (calories/protein/carbs/fat) from the cascade's
+        {kcal,protein,carbs,fat} block. Missing values become 0 so the client can always
+        multiply by a weight."""
+        m = macros or {}
+        return {
+            "calories": round(m.get("kcal") or 0.0),
+            "protein": round(m.get("protein") or 0.0, 1),
+            "carbs": round(m.get("carbs") or 0.0, 1),
+            "fat": round(m.get("fat") or 0.0, 1),
+        }
 
     @staticmethod
     def decode_barcode(image: bytes) -> str | None:
@@ -185,9 +187,14 @@ class VisionCascade:
     # --- the validated cascade, adapted to the flat item contract ----------------
 
     def _run_cascade(
-        self, image: bytes, filename: str, content_type: str | None, weight_g: float | None
+        self, image: bytes, filename: str, content_type: str | None
     ) -> tuple[list[dict], str]:
-        """Run identify() and flatten its components. Returns ([], "") on any failure."""
+        """Run identify() and flatten its components. Returns ([], "") on any failure.
+
+        The scale weight is deliberately NOT passed to identify() — the model is never
+        told the weight and the backend does no weight math. Each item carries only its
+        per-100g density + fraction (its share of the plate); the client multiplies by the
+        live scale weight."""
         if not settings.openrouter_api_key:
             return [], ""  # no key -> caller uses the filename fallback
         try:
@@ -197,12 +204,9 @@ class VisionCascade:
         except Exception:  # noqa: BLE001 - engine deps unavailable -> fallback
             return [], ""
 
-        # The cascade prices components off `grams`; feed it the scale weight, or the
-        # nominal default so items still carry absolute macros when weight is absent.
-        total = weight_g if weight_g is not None else DEFAULT_TOTAL_GRAMS
         mime = content_type or "image/jpeg"
         try:
-            result = identify(image, grams=total, mime=mime, verbose=False)
+            result = identify(image, grams=None, mime=mime, verbose=False)
         except Exception:  # noqa: BLE001 - model/network error -> fallback
             return [], ""
 
@@ -211,7 +215,6 @@ class VisionCascade:
         top_conf = result.result.get("confidence")
         items: list[dict] = []
         for component in result.result.get("components", []):
-            macros = component.get("macros") or {}
             per_100g = component.get("per_100g") or {}
             serving_grams = component.get("serving_grams")
             source_tag = component.get("macro_source", "estimate")
@@ -225,22 +228,14 @@ class VisionCascade:
             items.append(
                 {
                     "name": component.get("name", "food"),
-                    "grams": round(component.get("grams") or 0.0, 1),
-                    "calories": round(macros.get("kcal") or 0.0),
-                    "protein": round(macros.get("protein") or 0.0, 1),
-                    "carbs": round(macros.get("carbs") or 0.0, 1),
-                    "fat": round(macros.get("fat") or 0.0, 1),
+                    # This component's share of the plate by mass; the client turns it
+                    # into grams against the scale weight and prices it off per100.
+                    "fraction": round(float(component.get("fraction") or 0.0), 4),
+                    "per100": self._per100(per_100g),
                     "confidence": max(0.0, min(1.0, float(confidence))),
                     "fdcId": reference,
                     "source": _SOURCE_LABEL.get(source_tag, source_tag),
-                    # Portion helpers for the "log by serving / re-weigh" flow: the
-                    # food's per-100g density and grams-per-serving when known (OFF).
-                    "per100": {
-                        "calories": round(per_100g.get("kcal") or 0.0),
-                        "protein": round(per_100g.get("protein") or 0.0, 1),
-                        "carbs": round(per_100g.get("carbs") or 0.0, 1),
-                        "fat": round(per_100g.get("fat") or 0.0, 1),
-                    },
+                    # Grams-per-serving when the source knows it (Open Food Facts).
                     "servingGrams": (
                         round(float(serving_grams), 1)
                         if serving_grams is not None
@@ -267,32 +262,32 @@ class VisionCascade:
     # --- deterministic fallback (no model / no key) ------------------------------
 
     @staticmethod
-    def _filename_fallback(
-        filename: str, digest: str, weight_g: float | None
-    ) -> list[dict]:
+    def _filename_fallback(filename: str, digest: str) -> list[dict]:
         normalized = re.sub(r"[_\-.]+", " ", filename.lower())
         candidates = [name for name in REFERENCE_FOODS if name in normalized]
         if not candidates:
             names = list(REFERENCE_FOODS)
             candidates = [names[int(digest[:8], 16) % len(names)]]
         candidates = candidates[:3]
-        total = weight_g if weight_g is not None else DEFAULT_TOTAL_GRAMS
-        grams_each = total / len(candidates)
+        # Even split across the guessed foods; the client applies the scale weight.
+        fraction = round(1.0 / len(candidates), 4)
         items = []
         for name in candidates:
             calories, protein, carbs, fat = REFERENCE_FOODS[name]
-            factor = grams_each / 100
             items.append(
                 {
                     "name": name.title(),
-                    "grams": round(grams_each, 1),
-                    "calories": round(calories * factor),
-                    "protein": round(protein * factor, 1),
-                    "carbs": round(carbs * factor, 1),
-                    "fat": round(fat * factor, 1),
+                    "fraction": fraction,
+                    "per100": {
+                        "calories": round(calories),
+                        "protein": round(protein, 1),
+                        "carbs": round(carbs, 1),
+                        "fat": round(fat, 1),
+                    },
                     "confidence": 0.45,
                     "fdcId": None,
                     "source": "reference",
+                    "servingGrams": None,
                 }
             )
         return items

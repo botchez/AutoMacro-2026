@@ -154,21 +154,28 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 204)
 
     def test_vision_fallback_and_cache(self):
+        # A non-decodable image forces the deterministic filename fallback. The response
+        # is weight-independent: per-100g density + a fraction, no scale weight involved
+        # (the client does the weight math), and the source is stated on every item.
         image = b"\x89PNG\r\n\x1a\n" + b"test-image-content"
         files = {"image": ("banana.png", image, "image/png")}
         first = self.client.post(
             "/api/vision/analyze",
             headers=self.headers,
             files=files,
-            data={"weight": "120"},
         )
         self.assertEqual(first.status_code, 200, first.text)
-        self.assertEqual(first.json()["items"][0]["grams"], 120)
+        item = first.json()["items"][0]
+        self.assertNotIn("grams", item)  # no absolute weight baked in by the backend
+        self.assertAlmostEqual(sum(i["fraction"] for i in first.json()["items"]), 1.0, places=3)
+        self.assertIn("per100", item)
+        self.assertIn("calories", item["per100"])
+        self.assertEqual(item["source"], "reference")
+        # Cache key is the image alone (weight-independent), so a repeat hits the cache.
         second = self.client.post(
             "/api/vision/analyze",
             headers=self.headers,
             files=files,
-            data={"weight": "120"},
         )
         self.assertTrue(second.json()["cached"])
 

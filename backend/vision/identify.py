@@ -16,10 +16,14 @@ Cascade order (stack.md):
 Macros per component come from the most authoritative source available: a label's
 own panel (source "ocr"), Open Food Facts (barcode), or a USDA FoodData Central
 lookup for named ingredients; the model's own estimate is only a flagged fallback.
+The model is NEVER told the scale weight — it only names each food (so the DB lookup
+can run) and gives each component a "fraction" (its share of the plate by mass).
 
-If `grams` is given (the scale weight), each component's absolute macros are
-`fraction * grams * per-100g`; without it you still get per-100g. Everything about
-the model call is instrumented into a transcript.
+The result is weight-agnostic: every component carries `per_100g` + `fraction`, so the
+caller (the frontend) does the actual `fraction * grams * per-100g` math against the
+live scale weight. `grams` is an optional convenience for CLI/tests — pass it and the
+result also carries absolute totals; the API path leaves it None. Everything about the
+model call is instrumented into a transcript.
 """
 
 from __future__ import annotations
@@ -85,10 +89,7 @@ OFF_USER_AGENT = os.getenv(
 )
 
 
-def _prompt(grams: float | None) -> str:
-    weight = (f"A scale measured the whole item at {grams} g. Use it to reason about "
-              f"realistic amounts, but " if grams else "A separate scale measures "
-              "weight, so ")
+def _prompt() -> str:
     return f"""\
 You identify food from a single photo for a nutrition logger, and you ALWAYS return
 a list of components. First classify the image, then respond accordingly:
@@ -103,8 +104,18 @@ a list of components. First classify the image, then respond accordingly:
   small component if the food looks fried, oily, or sauced — it's the most-missed
   source of calories.
 
-{weight}you must NOT estimate portion size. Give each component a "fraction" of the
-total food weight; fractions MUST sum to 1.0 (a single item is just 1.0).
+CRITICAL — you do NOT provide the nutrition numbers; a database does. Your job is to
+NAME each food precisely enough that a nutrition database can be looked up for it:
+- packaged/branded products are priced from Open Food Facts via your "off_query",
+- raw/whole/home-cooked foods are priced from USDA FoodData Central via your "usda_query".
+Get those query strings right — that is the whole task. The "est_per_100g" you give is a
+LAST-RESORT fallback used ONLY when the database has no match for your query, so never
+inflate your confidence in it; the lookup almost always wins over your own guess.
+
+You are NOT told the weight and you must NOT estimate portion size or grams — a scale
+handles that separately and the app does the weight math. Instead give each component a
+"fraction" of the total food weight (its share of the plate by mass); fractions MUST sum
+to 1.0 (a single item is just 1.0).
 
 For each component:
 - "name": what it is.
@@ -116,12 +127,15 @@ For each component:
 - "usda_query": for a NON-packaged food, a plain generic US-English ingredient name a
   nutrition database would list, cooked state included — e.g. "white rice, cooked",
   "chicken breast, cooked", "vegetable oil". Food + cooked state ONLY; no brand or extra
-  qualifiers. Leave "" for a packaged product or a label component.
+  qualifiers. ALWAYS fill this for a non-packaged food so the FDC lookup can run. Leave
+  "" only for a packaged product or a label component.
 - "off_query": for a PACKAGED product only, the brand + product name to search a
   packaged-food database — e.g. "Coca-Cola Classic", "Pringles Original", "Alpro Soya
-  Yogurt". Leave "" for non-packaged foods.
+  Yogurt". ALWAYS fill this for a packaged product so the Open Food Facts lookup can run.
+  Leave "" for non-packaged foods.
 - "est_per_100g": macros per 100 g {{"kcal","protein","carbs","fat"}} — the values you
-  read for a label, otherwise your best estimate (used only if the DB lookup misses).
+  read for a label, otherwise your best estimate. FALLBACK ONLY: used just if the DB
+  lookup misses, so the app can still show something.
 - "cooking_note": brief (fried/steamed/raw/sauced).
 
 Respond with ONLY this JSON, no prose, no code fences:
@@ -615,7 +629,7 @@ def identify(image_bytes: bytes, grams: float | None = None,
     if resize_note:
         note(resize_note)
     client = _client()
-    resp, model = _call_vision(client, model_bytes, model_mime, _prompt(grams), note)
+    resp, model = _call_vision(client, model_bytes, model_mime, _prompt(), note)
     msg = resp.choices[0].message
     reasoning = _reasoning_of(msg)
     raw = (msg.content or "").strip()

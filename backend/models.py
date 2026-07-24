@@ -114,16 +114,30 @@ class CoachHistoryOut(ApiModel):
     recommendations: list[CoachRecommendation]
 
 
+class Per100Macros(ApiModel):
+    """Per-100g macro density. The weight-independent nutrition figure the client
+    multiplies by the live scale weight — the backend never bakes in a weight."""
+
+    calories: float = Field(ge=0)
+    protein: float = Field(ge=0)
+    carbs: float = Field(ge=0)
+    fat: float = Field(ge=0)
+
+
 class VisionFood(ApiModel):
     name: str
-    grams: float
-    calories: float
-    protein: float
-    carbs: float
-    fat: float
+    # A ratio, not a weight: this component's share of the whole plate by mass.
+    # Fractions across items sum to ~1.0 (a single item is 1.0). The client turns
+    # `fraction * scale_weight` into grams, then prices it off `per100`.
+    fraction: float = Field(ge=0, le=1)
+    per100: Per100Macros
     confidence: float = Field(ge=0, le=1)
-    fdcId: str | None = None
+    # Where the nutrition came from, surfaced verbatim in the UI so the user can see
+    # it: "openfoodfacts", "usda-fdc", "label", "barcode", or "estimate".
     source: str
+    fdcId: str | None = None
+    # Grams-per-serving when the source knows it (Open Food Facts), else null.
+    servingGrams: float | None = None
 
 
 class VisionOut(ApiModel):

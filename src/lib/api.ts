@@ -1,4 +1,4 @@
-import type { DayLog, FoodItem, Goals, MealEntry, User, UserSettings } from "./store";
+import type { DayLog, Goals, Macros, MealEntry, User, UserSettings } from "./store";
 
 const TOKEN_KEY = "nutricoach:session";
 
@@ -10,10 +10,23 @@ type AppState = {
 };
 
 type AuthResponse = { token: string; user: Exclude<User, null> };
-export type DetectedItem = Omit<FoodItem, "id"> & {
+/**
+ * A weight-independent detection. The backend never sees the scale weight and does no
+ * weight math: it returns each food's per-100g density (`per100`), its `fraction` (share
+ * of the whole plate by mass — 1.0 for a single item), and the `source` the numbers came
+ * from. The client multiplies `fraction * scaleWeight` to get grams, then prices it off
+ * `per100`.
+ */
+export type DetectedItem = {
+  name: string;
+  /** This food's share of the total plate weight (fractions sum to ~1). */
+  fraction: number;
+  /** Per-100g macro density — the authoritative figure the client scales by weight. */
+  per100: Macros;
   confidence: number;
-  /** Per-100g macro density, for re-weighing / serving math. */
-  per100?: { calories: number; protein: number; carbs: number; fat: number };
+  /** Where the nutrition came from: "openfoodfacts" | "usda-fdc" | "label" | "barcode" | "estimate" | "reference". */
+  source: string;
+  fdcId?: string | null;
   /** Grams per serving when known (Open Food Facts), else null. */
   servingGrams?: number | null;
 };
@@ -116,19 +129,19 @@ export const api = {
     request<void>(`/api/logs/${mealId}`, {
       method: "DELETE",
     }),
-  analyze: (image: File, weight?: number) => {
+  // No weight is sent: detection is weight-independent (per-100g + fraction). The
+  // client applies the live scale weight to the result itself.
+  analyze: (image: File) => {
     const form = new FormData();
     form.append("image", image);
-    if (weight && weight > 0) form.append("weight", String(weight));
     return request<VisionResponse>("/api/vision/analyze", {
       method: "POST",
       body: form,
     });
   },
-  scanBarcodeFrame: (frame: Blob, weight?: number) => {
+  scanBarcodeFrame: (frame: Blob) => {
     const form = new FormData();
     form.append("image", frame, "frame.jpg");
-    if (weight && weight > 0) form.append("weight", String(weight));
     return request<{
       status: "none" | "unmatched" | "matched";
       barcode: string | null;
