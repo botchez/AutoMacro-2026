@@ -124,6 +124,20 @@ class Per100Macros(ApiModel):
     fat: float = Field(ge=0)
 
 
+class ToolCall(ApiModel):
+    """One database lookup the resolver made while pricing a food — surfaced to the UI
+    so the model→tool→result chain is visible for debugging."""
+
+    tool: str  # "openfoodfacts" | "usda-fdc" | "barcode" | "label" | "estimate"
+    query: str | None = None  # what was searched
+    matchedQuery: str | None = None  # the query variant that actually hit (OFF retry)
+    result: str | None = None  # what came back (product/food name), or null on a miss
+    fdcId: str | int | None = None
+    per100: dict | None = None  # the per-100g macros this lookup produced
+    cached: bool | None = None
+    status: str  # "hit" | "miss" | "used"
+
+
 class VisionFood(ApiModel):
     name: str
     # A ratio, not a weight: this component's share of the whole plate by mass.
@@ -138,9 +152,23 @@ class VisionFood(ApiModel):
     fdcId: str | None = None
     # Grams-per-serving when the source knows it (Open Food Facts), else null.
     servingGrams: float | None = None
+    # The lookups that produced this food's numbers (for the debug panel).
+    trace: list[ToolCall] = []
+
+
+class VisionDebug(ApiModel):
+    """Verbose trace of the whole analyze call, for the frontend debug panel."""
+
+    model: str | None = None  # the model/provider that answered ("barcode/off" for a scan)
+    barcode: str | None = None  # decoded barcode, if any
+    modelRaw: str | None = None  # the model's raw JSON reply
+    reasoning: str | None = None  # the model's chain-of-thought, when it exposes it
+    notes: list[str] = []  # step-by-step notes from the cascade
+    usage: dict | None = None  # token usage for the model call
 
 
 class VisionOut(ApiModel):
     items: list[VisionFood]
     provider: str
     cached: bool = False
+    debug: VisionDebug | None = None

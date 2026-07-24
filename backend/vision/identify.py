@@ -341,6 +341,7 @@ def _off_search_once(query: str) -> dict | None:
             "macros_per_100g": macros,
             "serving_grams": _off_serving_grams(p),
             "barcode": p.get("code"),
+            "query": query,  # the exact query that produced this hit (for the debug trace)
         }
     return None
 
@@ -516,11 +517,15 @@ def _resolve_component(raw: dict, note) -> dict:
     """Turn one model component into {name, macro_source, per_100g, ...}.
 
     Macro source priority: a label's own panel (ocr) > USDA FDC lookup > the model's
-    own estimate (flagged). Fraction/cooking_note are carried through.
+    own estimate (flagged). Fraction/cooking_note are carried through. Every database
+    lookup the resolver tries — what it searched for and what came back — is recorded in
+    `comp["trace"]` so the frontend can show the model→tool→result chain for debugging.
     """
     name = str(raw.get("name") or "unknown").strip()
     src = str(raw.get("source", "vision")).lower()
     comp = {"name": name, "fraction": raw.get("fraction", 0.0)}
+    trace: list = []
+    comp["trace"] = trace
     if raw.get("cooking_note"):
         comp["cooking_note"] = str(raw["cooking_note"]).strip()
 
@@ -542,8 +547,13 @@ def _resolve_component(raw: dict, note) -> dict:
                 comp["serving_grams"] = hit["serving_grams"]
             if hit.get("barcode"):
                 comp["barcode"] = hit["barcode"]
+            trace.append({"tool": "openfoodfacts", "query": off_query,
+                          "matchedQuery": hit.get("query"), "result": hit["food_name"],
+                          "per100": comp["per_100g"], "status": "hit"})
             note(f"{name!r} -> Open Food Facts: {hit['food_name']}")
             return comp
+        trace.append({"tool": "openfoodfacts", "query": off_query, "result": None,
+                      "status": "miss"})
         # OFF miss (e.g. the model misread the brand, or OFF 503'd). A genuine label
         # read is still ground truth; otherwise fall through to a generic USDA FDC
         # lookup on the food name below — a named product like "orange juice" is in FDC
@@ -551,6 +561,8 @@ def _resolve_component(raw: dict, note) -> dict:
         if src == "ocr":
             comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
             comp["macro_source"] = "label"
+            trace.append({"tool": "label", "query": None, "result": "read off the carton",
+                          "per100": comp["per_100g"], "status": "used"})
             note(f"{name!r} -> packaged, no Open Food Facts match; using label read")
             return comp
         note(f"{name!r} -> packaged, no Open Food Facts match; trying USDA FDC for the generic food")
@@ -559,6 +571,8 @@ def _resolve_component(raw: dict, note) -> dict:
     if src == "ocr":  # non-packaged label read -> the panel is the ground truth
         comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
         comp["macro_source"] = "label"
+        trace.append({"tool": "label", "query": None, "result": "read off the label",
+                      "per100": comp["per_100g"], "status": "used"})
         note(f"{name!r} -> read from nutrition label")
         return comp
 
@@ -570,11 +584,18 @@ def _resolve_component(raw: dict, note) -> dict:
         comp["fdc_match"] = hit.get("food_name")
         comp["fdc_id"] = hit.get("fdc_id")
         comp["usda_query"] = query
+        trace.append({"tool": "usda-fdc", "query": query, "result": hit.get("food_name"),
+                      "fdcId": hit.get("fdc_id"), "per100": comp["per_100g"],
+                      "cached": bool(hit.get("cached")), "status": "hit"})
         note(f"{name!r} -> FDC: {hit.get('food_name')} (fdc {hit.get('fdc_id')})")
     else:
         comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
         comp["macro_source"] = "estimate"
         comp["usda_query"] = query
+        trace.append({"tool": "usda-fdc", "query": query, "result": None, "status": "miss"})
+        trace.append({"tool": "estimate", "query": None,
+                      "result": "model's own per-100g guess (last resort)",
+                      "per100": comp["per_100g"], "status": "used"})
         note(f"{name!r} -> no FDC match; using model estimate")
     return comp
 
@@ -645,7 +666,11 @@ def identify(image_bytes: bytes, grams: float | None = None,
             events.append({"type": "off_hit", "result": off})
             comp = {"name": off["food_name"], "fraction": 1.0,
                     "per_100g": _coerce_per_100g(off["macros_per_100g"]),
-                    "macro_source": "barcode", "barcode": barcode}
+                    "macro_source": "barcode", "barcode": barcode,
+                    "trace": [{"tool": "barcode", "query": barcode,
+                               "result": off["food_name"],
+                               "per100": _coerce_per_100g(off["macros_per_100g"]),
+                               "status": "hit"}]}
             if off.get("serving_grams") is not None:
                 comp["serving_grams"] = off["serving_grams"]
             result = _build_result(off["food_name"], [comp], grams, events)

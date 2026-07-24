@@ -17,6 +17,18 @@ type AuthResponse = { token: string; user: Exclude<User, null> };
  * from. The client multiplies `fraction * scaleWeight` to get grams, then prices it off
  * `per100`.
  */
+/** One database lookup the resolver made while pricing a food — the model→tool→result
+ * chain, surfaced for the debug panel. */
+export type ToolCall = {
+  tool: string; // "openfoodfacts" | "usda-fdc" | "barcode" | "label" | "estimate"
+  query?: string | null; // what was searched
+  matchedQuery?: string | null; // the query variant that actually hit (OFF retry)
+  result?: string | null; // what came back, or null on a miss
+  fdcId?: string | number | null;
+  per100?: Record<string, number> | null;
+  cached?: boolean | null;
+  status: string; // "hit" | "miss" | "used"
+};
 export type DetectedItem = {
   name: string;
   /** This food's share of the total plate weight (fractions sum to ~1). */
@@ -29,11 +41,23 @@ export type DetectedItem = {
   fdcId?: string | null;
   /** Grams per serving when known (Open Food Facts), else null. */
   servingGrams?: number | null;
+  /** The lookups that produced this food's numbers (for the debug panel). */
+  trace?: ToolCall[];
+};
+/** Verbose trace of the whole analyze call, for the frontend debug panel. */
+export type VisionDebug = {
+  model?: string | null;
+  barcode?: string | null;
+  modelRaw?: string | null;
+  reasoning?: string | null;
+  notes?: string[];
+  usage?: Record<string, unknown> | null;
 };
 export type VisionResponse = {
   items: DetectedItem[];
   provider: string;
   cached: boolean;
+  debug?: VisionDebug | null;
 };
 export type CoachRecommendation = {
   name: string;

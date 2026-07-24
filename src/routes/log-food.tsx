@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { api, type DetectedItem } from "@/lib/api";
+import { api, type DetectedItem, type ToolCall, type VisionDebug } from "@/lib/api";
 import { useScale } from "@/hooks/use-scale";
 import { MOCK_FOOD_DB, scaleFood } from "@/lib/mock-foods";
 import {
@@ -91,6 +91,7 @@ type DetectedFood = FoodItem & {
   per100: Macros;
   fraction: number;
   servingGrams?: number | null;
+  trace?: ToolCall[];
 };
 
 // Turn the weight-independent detections from the API (per-100g density + fraction) into
@@ -115,6 +116,7 @@ function materialize(items: DetectedItem[], totalGrams: number): DetectedFood[] 
       per100: it.per100,
       fraction: it.fraction,
       servingGrams: it.servingGrams ?? null,
+      trace: it.trace ?? [],
     };
   });
 }
@@ -164,6 +166,139 @@ function SourceBadge({ source }: { source?: string | null }) {
     >
       {label}
     </span>
+  );
+}
+
+const TOOL_LABEL: Record<string, string> = {
+  openfoodfacts: "Open Food Facts",
+  "usda-fdc": "USDA FoodData Central",
+  barcode: "Barcode → Open Food Facts",
+  label: "Nutrition label OCR",
+  estimate: "AI estimate (fallback)",
+};
+
+const TRACE_STATUS_CLASS: Record<string, string> = {
+  hit: "bg-green-100 text-green-700",
+  used: "bg-sky-100 text-sky-700",
+  miss: "bg-rose-100 text-rose-700",
+};
+
+// One tool call: which DB was queried, with what string, and what came back. This is the
+// "model called this tool, searched for X, got Y" line the debug view is built around.
+function TraceRow({ call }: { call: ToolCall }) {
+  const per100 = call.per100 ?? null;
+  return (
+    <div className="rounded-lg border bg-white/70 p-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span
+          className={cn(
+            "rounded px-1.5 py-0.5 text-[10px] font-bold uppercase",
+            TRACE_STATUS_CLASS[call.status] ?? "bg-muted text-muted-foreground",
+          )}
+        >
+          {call.status}
+        </span>
+        <span className="text-[11px] font-extrabold">{TOOL_LABEL[call.tool] ?? call.tool}</span>
+      </div>
+      {call.query != null && (
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          searched <code className="rounded bg-muted px-1 font-mono">{call.query}</code>
+          {call.matchedQuery && call.matchedQuery !== call.query && (
+            <>
+              {" "}
+              → matched on{" "}
+              <code className="rounded bg-muted px-1 font-mono">{call.matchedQuery}</code>
+            </>
+          )}
+        </div>
+      )}
+      <div className="mt-0.5 text-[11px]">
+        {call.result ? (
+          <span className="font-bold text-foreground">→ {call.result}</span>
+        ) : (
+          <span className="font-bold text-rose-600">→ no match</span>
+        )}
+        {call.fdcId != null && (
+          <span className="ml-1 text-muted-foreground">(fdc {String(call.fdcId)})</span>
+        )}
+        {call.cached && <span className="ml-1 text-muted-foreground">· cached</span>}
+      </div>
+      {per100 && (
+        <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+          per 100g: {JSON.stringify(per100)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Collapsible verbose panel: the model's raw reply, the step notes, and each detected
+// food's tool-call chain. Purely a debugging aid — hidden behind a <details> so it never
+// clutters the normal flow.
+function DebugPanel({ debug, items }: { debug: VisionDebug | null; items: DetectedFood[] }) {
+  const hasTraces = items.some((it) => (it.trace?.length ?? 0) > 0);
+  if (!debug && !hasTraces) return null;
+  return (
+    <details className="rounded-2xl border border-dashed bg-muted/30 p-3 text-xs">
+      <summary className="cursor-pointer font-extrabold">
+        🐞 Debug trace{debug?.model ? ` · ${debug.model}` : ""}
+      </summary>
+      <div className="mt-3 space-y-3">
+        {debug?.barcode && (
+          <div>
+            <span className="font-bold">Barcode:</span>{" "}
+            <code className="rounded bg-muted px-1 font-mono">{debug.barcode}</code>
+          </div>
+        )}
+        {items.map(
+          (it) =>
+            (it.trace?.length ?? 0) > 0 && (
+              <div key={it.id} className="space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-extrabold">{it.name}</span>
+                  <SourceBadge source={it.source} />
+                </div>
+                <div className="space-y-1">
+                  {it.trace!.map((call, i) => (
+                    <TraceRow key={i} call={call} />
+                  ))}
+                </div>
+              </div>
+            ),
+        )}
+        {debug?.notes && debug.notes.length > 0 && (
+          <div>
+            <div className="mb-1 font-bold">Steps</div>
+            <ul className="space-y-0.5 text-[11px] text-muted-foreground">
+              {debug.notes.map((n, i) => (
+                <li key={i}>• {n}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {debug?.reasoning && (
+          <details className="rounded-lg border bg-white/70 p-2">
+            <summary className="cursor-pointer font-bold">Model reasoning</summary>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground">
+              {debug.reasoning}
+            </pre>
+          </details>
+        )}
+        {debug?.modelRaw && (
+          <details className="rounded-lg border bg-white/70 p-2">
+            <summary className="cursor-pointer font-bold">Model raw response</summary>
+            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground">
+              {debug.modelRaw}
+            </pre>
+          </details>
+        )}
+        {debug?.usage && (
+          <div className="font-mono text-[10px] text-muted-foreground">
+            usage: {JSON.stringify(debug.usage)}
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -248,6 +383,7 @@ function LogFood() {
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [mealItems, setMealItems] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
+  const [visionDebug, setVisionDebug] = useState<VisionDebug | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
@@ -573,6 +709,7 @@ function LogFood() {
       // so a captured/uploaded barcode photo already resolves to the exact product.
       const result = await api.analyze(file);
       setVisionProvider(result.provider);
+      setVisionDebug(result.debug ?? null);
       return result.items;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not analyze that image");
@@ -832,6 +969,7 @@ function LogFood() {
               const items = materialize(res.result.items, total);
               setDetected(items);
               setVisionProvider(res.result.provider);
+              setVisionDebug(res.result.debug ?? null);
               toast.success(`Barcode matched: ${items[0]?.name ?? res.barcode}`, {
                 description: "Review the portion before adding it to the meal.",
               });
@@ -1508,6 +1646,13 @@ function LogFood() {
                   />
                 </section>
               )}
+
+              <DebugPanel
+                debug={visionDebug}
+                items={
+                  detected.length ? (detected as DetectedFood[]) : (pendingCapture?.items ?? [])
+                }
+              />
 
               <section>
                 <div className="flex items-end justify-between gap-3">

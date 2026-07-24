@@ -72,14 +72,21 @@ class VisionCascade:
 
         # The cascade is synchronous (and may block on model/HTTP calls with retries),
         # so run it off the event loop.
-        items, provider = await run_in_threadpool(
+        items, provider, debug = await run_in_threadpool(
             self._run_cascade, image, filename, content_type
         )
         if not items:  # cascade produced nothing usable -> deterministic fallback
             items = self._filename_fallback(filename, digest)
             provider = "filename-fallback"
+            debug = {
+                "model": "filename-fallback",
+                "notes": [
+                    "vision model unavailable (no key / dep / upstream error); "
+                    "guessed foods from the filename."
+                ],
+            }
 
-        payload = {"items": items, "provider": provider, "cached": False}
+        payload = {"items": items, "provider": provider, "cached": False, "debug": debug}
         self.connection.execute(
             """
             INSERT OR REPLACE INTO vision_cache
@@ -116,18 +123,38 @@ class VisionCascade:
             return None
 
         serving_grams = off.get("serving_grams")
+        per100 = self._per100(off.get("macros_per_100g"))
         item = {
             "name": off.get("food_name") or f"Barcode {barcode}",
             "fraction": 1.0,
-            "per100": self._per100(off.get("macros_per_100g")),
+            "per100": per100,
             "confidence": _SOURCE_CONFIDENCE["barcode"],
             "fdcId": barcode,
             "source": _SOURCE_LABEL["barcode"],
             "servingGrams": (
                 round(float(serving_grams), 1) if serving_grams is not None else None
             ),
+            "trace": [
+                {
+                    "tool": "barcode",
+                    "query": barcode,
+                    "result": off.get("food_name"),
+                    "per100": per100,
+                    "status": "hit",
+                }
+            ],
         }
-        payload = {"items": [item], "provider": "barcode/openfoodfacts", "cached": False}
+        debug = {
+            "model": "barcode/openfoodfacts",
+            "barcode": barcode,
+            "notes": [f"decoded barcode {barcode} -> Open Food Facts: {item['name']}"],
+        }
+        payload = {
+            "items": [item],
+            "provider": "barcode/openfoodfacts",
+            "cached": False,
+            "debug": debug,
+        }
         self.connection.execute(
             """
             INSERT OR REPLACE INTO vision_cache
@@ -188,27 +215,28 @@ class VisionCascade:
 
     def _run_cascade(
         self, image: bytes, filename: str, content_type: str | None
-    ) -> tuple[list[dict], str]:
-        """Run identify() and flatten its components. Returns ([], "") on any failure.
+    ) -> tuple[list[dict], str, dict | None]:
+        """Run identify() and flatten its components. Returns ([], "", None) on failure.
 
         The scale weight is deliberately NOT passed to identify() — the model is never
         told the weight and the backend does no weight math. Each item carries only its
         per-100g density + fraction (its share of the plate); the client multiplies by the
-        live scale weight."""
+        live scale weight. The third return value is a verbose debug block (model, raw
+        reply, step notes) for the frontend's debug panel."""
         if not settings.openrouter_api_key:
-            return [], ""  # no key -> caller uses the filename fallback
+            return [], "", None  # no key -> caller uses the filename fallback
         try:
             # Imported lazily so a missing optional dep (openai/pillow) degrades to the
             # fallback instead of breaking import of the whole service.
             from ..vision import identify
         except Exception:  # noqa: BLE001 - engine deps unavailable -> fallback
-            return [], ""
+            return [], "", None
 
         mime = content_type or "image/jpeg"
         try:
             result = identify(image, grams=None, mime=mime, verbose=False)
         except Exception:  # noqa: BLE001 - model/network error -> fallback
-            return [], ""
+            return [], "", None
 
         self._maybe_write_transcript(filename, result)
 
@@ -241,9 +269,29 @@ class VisionCascade:
                         if serving_grams is not None
                         else None
                     ),
+                    # The lookups that produced this food's numbers (debug panel).
+                    "trace": component.get("trace", []),
                 }
             )
-        return items, result.model
+        return items, result.model, self._build_debug(result)
+
+    @staticmethod
+    def _build_debug(result) -> dict:
+        """Distil the cascade's event transcript into a JSON-safe debug block."""
+        model_turn = next(
+            (e for e in result.events if e.get("type") == "model_turn"), {}
+        )
+        barcode_evt = next(
+            (e for e in result.events if e.get("type") == "barcode"), None
+        )
+        return {
+            "model": result.model,
+            "barcode": barcode_evt.get("value") if barcode_evt else None,
+            "modelRaw": model_turn.get("raw"),
+            "reasoning": model_turn.get("reasoning"),
+            "usage": model_turn.get("usage"),
+            "notes": [e["content"] for e in result.events if e.get("type") == "note"],
+        }
 
     def _maybe_write_transcript(self, filename: str, result) -> None:
         if settings.transcripts_dir is None:
