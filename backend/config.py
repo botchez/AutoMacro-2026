@@ -38,6 +38,16 @@ class Settings:
     # key, one endpoint — only the model slug differs). Set this to enable the model
     # stages; without it both services fall back to their deterministic paths.
     openrouter_api_key: str | None = os.getenv("OPENROUTER_API_KEY")
+    # Kill switch for the coach agent's model calls without touching the shared
+    # OPENROUTER key (which also drives vision). Set COACH_AGENT_ENABLED=0 to make the
+    # coach serve its free deterministic rule replies — e.g. to stop the FloatingCoach's
+    # 60s auto-poll from spending tokens. Vision is unaffected.
+    coach_agent_enabled: bool = os.getenv("COACH_AGENT_ENABLED", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
     usda_api_key: str | None = os.getenv("USDA_FDC_API_KEY") or os.getenv("FDC_API_KEY")
     # Kept for backward compatibility; no longer the driver (engines use OpenRouter).
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")

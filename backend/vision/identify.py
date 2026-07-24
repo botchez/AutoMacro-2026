@@ -440,14 +440,12 @@ def _resolve_component(raw: dict, note) -> dict:
     if raw.get("cooking_note"):
         comp["cooking_note"] = str(raw["cooking_note"]).strip()
 
-    if src == "ocr":  # the label IS the ground truth — don't override with a DB
-        comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
-        comp["macro_source"] = "label"
-        note(f"{name!r} -> read from nutrition label")
-        return comp
-
-    # Packaged/branded product (no barcode, no readable label) -> Open Food Facts
-    # name search; fall back to the model's estimate only if OFF can't find it.
+    # Packaged/branded product -> Open Food Facts name search is the authoritative
+    # source for a manufactured item, so it takes priority even when the model also
+    # claims to have OCR'd the carton. A branded product that OFF lists exactly beats a
+    # "45 kcal" label read that's easy to over-claim (models routinely tag a packaged
+    # item "ocr" and hand back round, generic macros). Fall back to the label read or
+    # the model's estimate only when OFF has no usable match.
     if raw.get("packaged"):
         off_query = str(raw.get("off_query") or name).strip()
         comp["off_query"] = off_query
@@ -459,10 +457,18 @@ def _resolve_component(raw: dict, note) -> dict:
             if hit.get("barcode"):
                 comp["barcode"] = hit["barcode"]
             note(f"{name!r} -> Open Food Facts: {hit['food_name']}")
-        else:
-            comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
-            comp["macro_source"] = "estimate"
-            note(f"{name!r} -> packaged but no Open Food Facts match; using model estimate")
+            return comp
+        # OFF miss -> a genuine label read still beats a bare estimate.
+        comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
+        comp["macro_source"] = "label" if src == "ocr" else "estimate"
+        how = "read from label" if src == "ocr" else "model estimate"
+        note(f"{name!r} -> packaged but no Open Food Facts match; using {how}")
+        return comp
+
+    if src == "ocr":  # non-packaged label read -> the panel is the ground truth
+        comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
+        comp["macro_source"] = "label"
+        note(f"{name!r} -> read from nutrition label")
         return comp
 
     query = str(raw.get("usda_query") or name).strip()

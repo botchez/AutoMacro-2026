@@ -25,7 +25,42 @@ port, and same-origin `/api` calls.
 - A client-only Vite + React + Tailwind + shadcn UI
 - FastAPI static hosting with SPA fallback
 
-## Local setup
+## Prerequisites
+
+- Python 3.11+ (developed on 3.13)
+- Node.js 18+ with npm
+
+## Quick start (one command)
+
+From the project root:
+
+```powershell
+.\run.ps1
+```
+
+That's it. `run.ps1` creates the virtualenv, installs the Python and npm
+dependencies if they're missing, builds the frontend, and serves the whole app
+(API + UI) from a single process. Open `http://localhost:8000`.
+
+If PowerShell blocks the script with an execution-policy error, run it as:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run.ps1
+```
+
+For hot-reloading development (API on `:8000`, Vite dev server on `:5173`):
+
+```powershell
+.\run.ps1 -Dev
+```
+
+The seeded demo login is `demo@nutricoach.app` / `demo1234`, and API
+documentation is at `/api/docs`. The app runs fully without any API keys — see
+[Configuration](#configuration) to enable the AI stages.
+
+## Manual setup
+
+If you'd rather not use `run.ps1`, the underlying steps are:
 
 ```powershell
 python -m venv .venv
@@ -50,7 +85,7 @@ npm start
 
 Open `http://localhost:8000`. API documentation is at `/api/docs`.
 
-The seeded demo login is `demo@nutricoach.app` / `demo1234`.
+## Configuration
 
 Copy `.env.example` to `.env` or set environment variables in your runtime.
 `OPENROUTER_API_KEY` enables both model stages; `USDA_FDC_API_KEY` (aka

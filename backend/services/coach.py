@@ -46,7 +46,7 @@ class CoachService:
 
         answer = None
         source = "rules"
-        if settings.openrouter_api_key:
+        if settings.openrouter_api_key and settings.coach_agent_enabled:
             answer = await self._agent_reply(state, message)
             if answer:
                 source = "coach-agent"
