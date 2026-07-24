@@ -1,9 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import cornImage from "@/assets/corn.png";
-import brocolliImage from "@/assets/brocolli.png";
-import bicepsImage from "@/assets/bicepsflex.png";
-import latspreadImage from "@/assets/latspread.png";
+import skinnyImage from "@/assets/skinny.png";
+import bulkyImage from "@/assets/bulky.png";
+import buffImage from "@/assets/buff.png";
 import { Mascot } from "@/components/Mascot";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,16 +48,16 @@ const CAROUSEL_ITEMS = [
     tag: "AI Nutrition Coach",
     title: "Tips & Motivation",
     description: "Get real-time feedback, smart meal advice, and daily encouragement.",
-    image: brocolliImage,
-    alt: "Broccoli coach giving advice",
+    image: skinnyImage,
+    alt: "Skinny fitness coach giving nutrition advice",
     bgGlow: "bg-leaf/30",
   },
   {
     tag: "Food History & Logs",
     title: "Track & Reflect",
     description: "Review your past meal logs, edit foods, and search historical entries.",
-    image: bicepsImage,
-    alt: "Biceps flex nutrition tracking",
+    image: bulkyImage,
+    alt: "Bulky fitness coach representing nutrition progress",
     bgGlow: "bg-sky/30",
   },
   {
@@ -65,8 +65,8 @@ const CAROUSEL_ITEMS = [
     title: "Fuel Your Body",
     description:
       "Calories, Protein, Carbs & Fat targets tailored specifically for your fitness journey.",
-    image: latspreadImage,
-    alt: "Lat spread fitness mascot",
+    image: buffImage,
+    alt: "Buff fitness coach representing tailored macro goals",
     bgGlow: "bg-mango/30",
   },
 ];
