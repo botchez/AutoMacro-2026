@@ -3,3 +3,12 @@ uvicorn[standard]==0.35.0
 httpx==0.28.1
 python-multipart==0.0.20
 email-validator==2.2.0
+python-dotenv==1.0.1
+
+# Vision cascade + coach agent (via OpenRouter, using the OpenAI SDK wire format).
+openai>=1.40.0
+
+# Barcode branch of the vision cascade (optional). pyzbar needs the native zbar lib;
+# if it's missing the cascade simply skips barcodes and goes straight to the model.
+pyzbar>=0.1.9
+pillow>=10.0.0

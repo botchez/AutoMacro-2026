@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Aperture,
   Beef,
   CalendarDays,
   Camera,
@@ -15,8 +16,12 @@ import {
   Scale,
   Search,
   Trash2,
+  Unplug,
+  Upload,
+  Usb,
   Utensils,
   Wheat,
+  X,
 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { Mascot } from "@/components/Mascot";
@@ -32,6 +37,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "@/lib/api";
+import { useScale } from "@/hooks/use-scale";
 import { MOCK_FOOD_DB, scaleFood } from "@/lib/mock-foods";
 import {
   sumMacros,
@@ -71,10 +77,18 @@ function LogFood() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [mealHour, setMealHour] = useState(new Date().getHours().toString().padStart(2, "0"));
   const [mealMinute, setMealMinute] = useState("00");
-  const [scaleReading, setScaleReading] = useState(0);
+  // Live reading from the physical HX711 food scale over Web Serial, with a mock
+  // fallback so the demo still works with no hardware plugged in.
+  const scale = useScale();
+  const [mockWeight, setMockWeight] = useState(0);
   const [tareOffset, setTareOffset] = useState(0);
   const [capturedWeight, setCapturedWeight] = useState(0);
   const [scanning, setScanning] = useState(false);
+  // Live webcam capture
+  const [cameraOn, setCameraOn] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [mealItems, setMealItems] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
@@ -102,12 +116,94 @@ function LogFood() {
     return () => window.clearInterval(interval);
   }, []);
 
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setCameraOn(false);
+  };
+
+  const startCamera = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast.error("Camera not supported", {
+        description: "Your browser can't access a webcam. Upload an image instead.",
+      });
+      return;
+    }
+    setCameraStarting(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      // The <video> mounts on the next render; a useEffect attaches the stream
+      // once the element is actually in the DOM (see below).
+      setCameraOn(true);
+    } catch (error) {
+      const message =
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "Camera permission denied. Allow access or upload an image."
+          : "Could not start the camera. Try uploading an image instead.";
+      toast.error(message);
+    } finally {
+      setCameraStarting(false);
+    }
+  };
+
+  const capturePhoto = async () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) {
+      toast.error("Camera isn't ready yet — give it a second.");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      toast.error("Couldn't capture the frame. Try again.");
+      return;
+    }
+    const file = new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
+    stopCamera();
+    await captureImage(file);
+  };
+
+  // Attach the stream once the <video> element is mounted. Doing this in an effect
+  // (rather than right after getUserMedia) avoids a race where the element hasn't
+  // rendered yet, which shows a black frame.
+  useEffect(() => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!cameraOn || !video || !stream) return;
+    video.srcObject = stream;
+    const play = () => void video.play().catch(() => undefined);
+    if (video.readyState >= 2) play();
+    else video.onloadedmetadata = play;
+    return () => {
+      video.onloadedmetadata = null;
+    };
+  }, [cameraOn]);
+
+  // Release the camera when leaving the page.
+  useEffect(() => stopCamera, []);
+
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)),
     [weekStart],
   );
   const mealTime = `${normalizeTimePart(mealHour, 23)}:${normalizeTimePart(mealMinute, 59)}`;
-  const displayedWeight = Math.max(0, scaleReading - tareOffset);
+  // Hardware weight (already hardware-tared) when a scale is connected, otherwise the
+  // mock value. `tareOffset` is a software fallback for demo mode; `capturedWeight`
+  // freezes a reading (>0) for the analysis call.
+  const liveWeight = Math.max(0, (scale.connected ? (scale.weight ?? 0) : mockWeight) - tareOffset);
+  const displayedWeight = capturedWeight > 0 ? capturedWeight : liveWeight;
   const selectedDay = logs.find((day) => day.date === selectedDate);
   const mealTotals = useMemo(
     () => sumMacros([{ id: "draft", time: mealTime, items: mealItems }]),
@@ -170,25 +266,43 @@ function LogFood() {
     }
   };
 
+  const connectScale = async () => {
+    if (!scale.supported) {
+      toast.error("Web Serial not supported", {
+        description: "Use Chrome or Edge to connect the food scale.",
+      });
+      return;
+    }
+    const ok = await scale.connect();
+    if (ok) {
+      toast.success("Scale connected!", { description: "Live weight is streaming in." });
+    }
+  };
+
+  // Demo-only helper: fakes a platform reading when no hardware is connected.
   const simulateScale = () => {
     const reading = Math.round(60 + Math.random() * 340);
-    setScaleReading(reading + tareOffset);
+    setMockWeight(reading + tareOffset);
     toast("Scale reading updated", { description: `${reading}g on the platform.` });
   };
 
-  const tare = () => {
-    setTareOffset(scaleReading);
+  const tare = async () => {
     setCapturedWeight(0);
+    if (scale.connected) {
+      await scale.tare(); // zero the load cell on the hardware
+    } else {
+      setTareOffset(mockWeight);
+    }
     toast.success("Scale tared to 0g");
   };
 
   const captureWeight = () => {
-    if (displayedWeight <= 0) {
+    if (liveWeight <= 0) {
       toast.error("Place food on the scale or create a reading first.");
       return;
     }
-    setCapturedWeight(displayedWeight);
-    toast.success("Weight captured", { description: `${displayedWeight}g will guide detection.` });
+    setCapturedWeight(liveWeight);
+    toast.success("Weight captured", { description: `${liveWeight}g will guide detection.` });
   };
 
   const captureImage = async (file: File) => {
@@ -247,6 +361,9 @@ function LogFood() {
     if (!detected.length) return;
     setMealItems((current) => [...current, ...detected]);
     setDetected([]);
+    setCapturedWeight(0);
+    setMockWeight(0);
+    setTareOffset(0);
     toast.success("Detected foods added to this meal");
   };
 
@@ -262,6 +379,8 @@ function LogFood() {
       setEditorOpen(false);
       setImagePreview(null);
       setCapturedWeight(0);
+      setMockWeight(0);
+      setTareOffset(0);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save the meal");
     } finally {
@@ -404,54 +523,101 @@ function LogFood() {
               </div>
 
               <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-foreground/95 p-5 text-white">
-                {imagePreview ? (
-                  <img
-                    src={imagePreview}
-                    alt="Meal ready for food detection"
-                    className="absolute inset-0 h-full w-full object-cover opacity-70"
-                  />
+                {cameraOn ? (
+                  <div className="relative z-10 flex w-full flex-col items-center">
+                    <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-black">
+                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="max-h-[300px] w-full object-contain"
+                      />
+                      <button
+                        type="button"
+                        onClick={stopCamera}
+                        aria-label="Close camera"
+                        className="absolute right-2 top-2 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <Button
+                      onClick={() => void capturePhoto()}
+                      variant="secondary"
+                      className="mt-4 rounded-full font-bold"
+                    >
+                      <Aperture className="mr-2 h-4 w-4" /> Capture photo
+                    </Button>
+                  </div>
                 ) : (
-                  <div className="absolute inset-5 rounded-2xl border border-dashed border-white/25" />
+                  <>
+                    {imagePreview ? (
+                      <img
+                        src={imagePreview}
+                        alt="Meal ready for food detection"
+                        className="absolute inset-0 h-full w-full object-cover opacity-70"
+                      />
+                    ) : (
+                      <div className="absolute inset-5 rounded-2xl border border-dashed border-white/25" />
+                    )}
+                    <div className="relative z-10 text-center">
+                      {scanning ? (
+                        <>
+                          <Loader2 className="mx-auto h-10 w-10 animate-spin text-sun" />
+                          <div className="mt-3 font-extrabold">Analyzing your plate…</div>
+                        </>
+                      ) : (
+                        <>
+                          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-white/15 backdrop-blur">
+                            <Camera className="h-7 w-7" />
+                          </span>
+                          <div className="mt-3 font-extrabold">
+                            {imagePreview ? "Capture another angle" : "Show your meal"}
+                          </div>
+                          <div className="mt-1 text-xs text-white/65">
+                            Use your webcam or upload an image
+                          </div>
+                        </>
+                      )}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="sr-only"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) void captureImage(file);
+                        }}
+                      />
+                      <div className="mt-4 flex flex-wrap justify-center gap-2">
+                        <Button
+                          onClick={() => void startCamera()}
+                          disabled={scanning || cameraStarting}
+                          variant="secondary"
+                          className="rounded-full font-bold"
+                        >
+                          {cameraStarting ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Camera className="mr-2 h-4 w-4" />
+                          )}
+                          {cameraStarting ? "Starting…" : "Open camera"}
+                        </Button>
+                        <Button
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={scanning}
+                          variant="outline"
+                          className="rounded-full font-bold text-foreground"
+                        >
+                          <Upload className="mr-2 h-4 w-4" /> Upload image
+                        </Button>
+                      </div>
+                    </div>
+                  </>
                 )}
-                <div className="relative z-10 text-center">
-                  {scanning ? (
-                    <>
-                      <Loader2 className="mx-auto h-10 w-10 animate-spin text-sun" />
-                      <div className="mt-3 font-extrabold">Analyzing your plate…</div>
-                    </>
-                  ) : (
-                    <>
-                      <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-white/15 backdrop-blur">
-                        <Camera className="h-7 w-7" />
-                      </span>
-                      <div className="mt-3 font-extrabold">
-                        {imagePreview ? "Capture another angle" : "Show your meal"}
-                      </div>
-                      <div className="mt-1 text-xs text-white/65">
-                        Camera opens on supported phones
-                      </div>
-                    </>
-                  )}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="sr-only"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) void captureImage(file);
-                    }}
-                  />
-                  <Button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={scanning}
-                    variant="secondary"
-                    className="mt-4 rounded-full font-bold"
-                  >
-                    <Camera className="mr-2 h-4 w-4" /> Capture image
-                  </Button>
-                </div>
               </div>
             </div>
 
@@ -466,27 +632,66 @@ function LogFood() {
                       {displayedWeight}
                       <span className="ml-1 text-base text-muted-foreground">g</span>
                     </div>
-                    <div className="text-xs font-bold text-primary">
-                      {capturedWeight > 0 ? `${capturedWeight}g captured` : "Waiting to capture"}
+                    <div className="mt-1 flex items-center gap-1.5 text-xs font-bold">
+                      <span
+                        className={cn(
+                          "inline-block h-2 w-2 rounded-full",
+                          scale.connected ? "animate-pulse bg-green-500" : "bg-muted-foreground/40",
+                        )}
+                      />
+                      <span className={scale.connected ? "text-primary" : "text-muted-foreground"}>
+                        {capturedWeight > 0
+                          ? `${capturedWeight}g captured`
+                          : scale.connected
+                            ? "Live scale reading"
+                            : "Demo mode — scale not connected"}
+                      </span>
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={tare} className="rounded-xl">
-                      Tare
-                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={simulateScale}
+                      onClick={() => void tare()}
                       className="rounded-xl"
                     >
-                      <RefreshCw className="mr-1 h-3.5 w-3.5" /> Reading
+                      Tare
                     </Button>
+                    {!scale.connected && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={simulateScale}
+                        className="rounded-xl"
+                      >
+                        <RefreshCw className="mr-1 h-3.5 w-3.5" /> Reading
+                      </Button>
+                    )}
                   </div>
                 </div>
                 <Button onClick={captureWeight} className="mt-3 w-full rounded-xl font-bold">
                   <Scale className="mr-2 h-4 w-4" /> Capture weight
                 </Button>
+                {scale.supported &&
+                  (scale.connected ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void scale.disconnect()}
+                      className="mt-2 w-full rounded-xl text-xs"
+                    >
+                      <Unplug className="mr-1 h-3.5 w-3.5" /> Disconnect scale
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void connectScale()}
+                      className="mt-2 w-full rounded-xl text-xs"
+                    >
+                      <Usb className="mr-1 h-3.5 w-3.5" /> Connect scale
+                    </Button>
+                  ))}
               </section>
 
               {detected.length > 0 && (
