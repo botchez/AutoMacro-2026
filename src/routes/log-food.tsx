@@ -668,6 +668,35 @@ function LogFood() {
     }
   };
 
+  // Re-weigh a food that's already been logged, straight from the timeline. Same edit
+  // the draft review rows allow (resizeItem), but persisted immediately via updateMeal.
+  // Macros are recomputed from the stored per-100g density — never by scaling the already
+  // rounded numbers — so repeated edits don't drift. Throws on failure so the row can
+  // restore its field.
+  const resizeLoggedFood = async (meal: MealEntry, foodId: string, grams: number) => {
+    const safeGrams = Math.max(1, Math.round(grams));
+    const items = meal.items.map((item) => {
+      if (item.id !== foodId) return item;
+      const density = item.per100 ?? derivePer100(item);
+      const factor = safeGrams / 100;
+      return {
+        ...item,
+        grams: safeGrams,
+        per100: density,
+        calories: Math.round(density.calories * factor),
+        protein: round(density.protein * factor),
+        carbs: round(density.carbs * factor),
+        fat: round(density.fat * factor),
+      };
+    });
+    try {
+      await updateMeal(selectedDate, { ...meal, items });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update that food");
+      throw error;
+    }
+  };
+
   const connectScale = async () => {
     if (!scale.supported) {
       toast.error("Web Serial not supported", {
@@ -1185,6 +1214,7 @@ function LogFood() {
                     last={index === HOURS.length - 1}
                     onLog={() => openLogEditor(hour)}
                     onRemoveFood={(meal, foodId) => void removeLoggedFood(meal, foodId)}
+                    onResizeFood={resizeLoggedFood}
                     removingFoodId={removingFoodId}
                   />
                 );
@@ -1956,6 +1986,7 @@ function TimelineRow({
   last,
   onLog,
   onRemoveFood,
+  onResizeFood,
   removingFoodId,
 }: {
   hour: number;
@@ -1964,6 +1995,7 @@ function TimelineRow({
   last: boolean;
   onLog: () => void;
   onRemoveFood: (meal: MealEntry, foodId: string) => void;
+  onResizeFood: (meal: MealEntry, foodId: string, grams: number) => Promise<void>;
   removingFoodId: string | null;
 }) {
   const totals = sumMacros(meals);
@@ -1997,31 +2029,13 @@ function TimelineRow({
                 </div>
                 <div className="divide-y">
                   {meal.items.map((item) => (
-                    <div key={item.id} className="flex items-center gap-2 px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <span className="truncate text-sm font-extrabold">{item.name}</span>
-                          <SourceBadge source={item.source} />
-                        </div>
-                        <div className="text-[11px] text-muted-foreground">
-                          {Math.round(item.grams)}g · {Math.round(item.calories)} kcal · P{" "}
-                          {round(item.protein)} · C {round(item.carbs)} · F {round(item.fat)}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => onRemoveFood(meal, item.id)}
-                        disabled={removingFoodId === item.id}
-                        aria-label={`Remove logged ${item.name}`}
-                        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
-                      >
-                        {removingFoodId === item.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
-                        )}
-                      </button>
-                    </div>
+                    <LoggedFoodRow
+                      key={item.id}
+                      item={item}
+                      removing={removingFoodId === item.id}
+                      onCommit={(grams) => onResizeFood(meal, item.id, grams)}
+                      onRemove={() => onRemoveFood(meal, item.id)}
+                    />
                   ))}
                 </div>
               </div>
@@ -2045,6 +2059,104 @@ function TimelineRow({
           <Plus className="mr-1 h-3.5 w-3.5" /> {meals.length ? "Log more" : "Log"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+// One already-logged food in the timeline, editable in place. The grams field mirrors
+// the draft review rows (FoodRows): as you type, macros preview live from the stored
+// per-100g density, and the change is persisted on blur/Enter via updateMeal. A commit is
+// one network write, not one per keystroke; on failure the field restores its old value.
+function LoggedFoodRow({
+  item,
+  removing,
+  onCommit,
+  onRemove,
+}: {
+  item: FoodItem;
+  removing: boolean;
+  onCommit: (grams: number) => Promise<void>;
+  onRemove: () => void;
+}) {
+  const [draft, setDraft] = useState(String(Math.round(item.grams)));
+  const [saving, setSaving] = useState(false);
+
+  // Re-sync the field whenever the item's weight changes from the outside (e.g. after a
+  // successful commit, or a reload) so it always reflects the saved value at rest.
+  useEffect(() => {
+    setDraft(String(Math.round(item.grams)));
+  }, [item.grams]);
+
+  const density = item.per100 ?? derivePer100(item);
+  const draftGrams = Math.max(1, Math.round(parseFloat(draft) || 0));
+  const factor = draftGrams / 100;
+  const preview = {
+    calories: Math.round(density.calories * factor),
+    protein: round(density.protein * factor),
+    carbs: round(density.carbs * factor),
+    fat: round(density.fat * factor),
+  };
+  const dirty = draftGrams !== Math.round(item.grams);
+
+  const commit = async () => {
+    if (!dirty || saving) return;
+    setSaving(true);
+    try {
+      await onCommit(draftGrams);
+    } catch {
+      setDraft(String(Math.round(item.grams))); // restore on failure
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-extrabold">{item.name}</span>
+          <SourceBadge source={item.source} />
+        </div>
+        <div className="text-[11px] text-muted-foreground">
+          {preview.calories} kcal · P {preview.protein} · C {preview.carbs} · F {preview.fat}
+          {dirty && <span className="ml-1 font-bold text-primary">· unsaved</span>}
+        </div>
+      </div>
+      <div className="relative shrink-0">
+        <Input
+          type="number"
+          inputMode="numeric"
+          min={1}
+          value={draft}
+          disabled={saving || removing}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => void commit()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+          aria-label={`${item.name} weight in grams`}
+          className="h-8 w-20 rounded-lg pl-2 pr-6 text-right text-sm font-bold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        />
+        {saving ? (
+          <Loader2 className="pointer-events-none absolute right-1.5 top-2 h-3.5 w-3.5 animate-spin text-primary" />
+        ) : (
+          <span className="pointer-events-none absolute right-2 top-2 text-[10px] text-muted-foreground">
+            g
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={removing}
+        aria-label={`Remove logged ${item.name}`}
+        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+      >
+        {removing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+      </button>
     </div>
   );
 }

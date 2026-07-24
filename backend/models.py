@@ -90,6 +90,9 @@ class CoachMessageIn(ApiModel):
     # The client's LOCAL date (YYYY-MM-DD), so the coach scopes "today" to the day the
     # user is actually looking at rather than a server clock. Optional for compatibility.
     date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    # Dev-only override (0-23) for the coach's time-of-day context, to test what it says
+    # at any hour. None uses the real server clock.
+    hour: int | None = Field(default=None, ge=0, le=23)
 
 
 class CoachRecommendation(ApiModel):

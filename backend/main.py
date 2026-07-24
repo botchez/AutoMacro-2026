@@ -560,11 +560,12 @@ async def scan_barcode_frame(
 @app.get("/api/coach/tip", response_model=CoachOut)
 async def coach_tip(
     date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    hour: int | None = Query(default=None, ge=0, le=23),
     user: sqlite3.Row = Depends(current_user),
     connection: sqlite3.Connection = Depends(db_connection),
 ):
     with connection:
-        return await CoachService(connection).reply(user["id"], today=date)
+        return await CoachService(connection).reply(user["id"], today=date, hour=hour)
 
 
 @app.get("/api/coach/history", response_model=CoachHistoryOut)
@@ -593,7 +594,7 @@ async def coach_message(
 ):
     with connection:
         return await CoachService(connection).reply(
-            user["id"], payload.message, today=payload.date
+            user["id"], payload.message, today=payload.date, hour=payload.hour
         )
 
 

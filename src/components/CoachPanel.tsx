@@ -46,6 +46,10 @@ export function CoachPanel() {
   const [logTarget, setLogTarget] = useState<CoachRecommendation | null>(null);
   const [logGrams, setLogGrams] = useState("");
   const [logSaving, setLogSaving] = useState(false);
+  // Simulate the hour the coach sees, to test its time-of-day coaching. "" means use the
+  // real clock. Applies to both the chat and the "Run coach tip" button.
+  const [devHour, setDevHour] = useState("");
+  const [devRunning, setDevRunning] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const { mealsLogged, addMeal } = useApp();
 
@@ -220,6 +224,37 @@ export function CoachPanel() {
     }
   };
 
+  // The simulated hour to send the coach, or undefined to use the real clock.
+  const devHourValue = (): number | undefined => {
+    if (devHour === "") return undefined;
+    const n = Number.parseInt(devHour, 10);
+    if (Number.isNaN(n)) return undefined;
+    return Math.min(23, Math.max(0, n));
+  };
+
+  // Run a fresh coach tip at the simulated hour and append its reply, so we can see what
+  // the coach says at any time of day.
+  const runDevTip = async () => {
+    if (devRunning || loading || pending) return;
+    const hour = devHourValue();
+    setDevRunning(true);
+    try {
+      const tip = await api.coachTip(todayIso(), hour);
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: tip.message, createdAt: new Date().toISOString() },
+      ]);
+      setRecommendations(Array.isArray(tip.recommendations) ? tip.recommendations : []);
+      setRecommendationContext(
+        hour != null ? `simulated ${String(hour).padStart(2, "0")}:00` : "your latest logged meal",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Coach test failed");
+    } finally {
+      setDevRunning(false);
+    }
+  };
+
   useEffect(() => {
     const loadConversation = async () => {
       setLoading(true);
@@ -281,7 +316,7 @@ export function CoachPanel() {
     // re-attachable from history if the user navigates away before it finishes.
     startWatch();
     try {
-      await api.coachMessage(trimmed, todayIso());
+      await api.coachMessage(trimmed, todayIso(), devHourValue());
       await finalizeReply();
     } catch (error) {
       // Surface the real failure instead of a soothing non-answer — the coach fails
@@ -452,6 +487,50 @@ export function CoachPanel() {
                 )}
               </Button>
             </form>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-amber-400/60 bg-amber-50/70 px-3 py-2 text-xs dark:border-amber-500/40 dark:bg-amber-950/20">
+              <span className="font-extrabold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                Test time
+              </span>
+              <label className="flex items-center gap-1 font-bold text-muted-foreground">
+                Hour
+                <Input
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={devHour}
+                  placeholder="now"
+                  onChange={(event) => setDevHour(event.target.value)}
+                  aria-label="Simulated hour for the coach (0-23)"
+                  className="h-8 w-16 rounded-lg text-center text-xs font-bold dark:bg-slate-900 dark:border-slate-700"
+                />
+              </label>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void runDevTip()}
+                disabled={devRunning || loading || pending}
+                className="h-8 rounded-lg text-xs font-bold dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100"
+              >
+                {devRunning ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Running…
+                  </>
+                ) : (
+                  "Run coach tip"
+                )}
+              </Button>
+              {devHour !== "" && (
+                <button
+                  type="button"
+                  onClick={() => setDevHour("")}
+                  className="font-semibold text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  use real clock
+                </button>
+              )}
+              <span className="text-muted-foreground">simulates time of day (chat too)</span>
+            </div>
           </div>
 
           <aside className="rounded-2xl border bg-white/85 dark:bg-slate-900/85 dark:border-slate-800 p-5 shadow-sm transition-colors">

@@ -75,18 +75,23 @@ class CoachService:
         self.connection = connection
 
     async def reply(
-        self, user_id: str, message: str | None = None, today: str | None = None
+        self,
+        user_id: str,
+        message: str | None = None,
+        today: str | None = None,
+        hour: int | None = None,
     ) -> dict:
         """Coach the user. message=None is an auto batch-log trigger; a message is chat.
 
         `today` is the client's LOCAL date (YYYY-MM-DD) — the same day the meal log and
         dashboard are showing. The coach reads that day rather than deriving one from a
         server clock, so which meals count as "today" always matches what the user sees,
-        regardless of the server's timezone."""
+        regardless of the server's timezone. `hour` (0-23) is a dev override for the
+        time-of-day context, so a tester can see what the coach says at any hour."""
         # Resolve the day once and use it everywhere: which meals count as today, and
         # which day this conversation's turns are filed under (the thread is per-day).
         day = self._valid_date(today) or self._local_today()
-        state = self._build_state(user_id, day)
+        state = self._build_state(user_id, day, hour)
 
         # For chat, capture the thread BEFORE saving the new user turn so the agent
         # sees prior context without the current question duplicated in.
@@ -247,7 +252,9 @@ class CoachService:
 
     # --- build the CoachState the agent reads ------------------------------------
 
-    def _build_state(self, user_id: str, today: str | None = None) -> CoachState:
+    def _build_state(
+        self, user_id: str, today: str | None = None, hour: int | None = None
+    ) -> CoachState:
         # The day to coach on: the client's local date when supplied, else the server's
         # local date as a fallback (e.g. a direct API call with no date).
         today = self._valid_date(today) or self._local_today()
@@ -329,7 +336,7 @@ class CoachService:
         state.current_batch = batch_items
         state.history_by_macro = self._history_by_macro(user_id, today)
         state.history_foods = self._history_food_index(user_id)
-        state.day_context = self._day_context(len(meals_today))
+        state.day_context = self._day_context(len(meals_today), hour)
         state.last_suggestion = self._last_suggestion(user_id, today)
         return state
 
@@ -509,8 +516,9 @@ class CoachService:
         return datetime.now().date().isoformat()
 
     @staticmethod
-    def _day_context(meals_logged: int) -> dict:
-        hour = datetime.now().hour
+    def _day_context(meals_logged: int, hour: int | None = None) -> dict:
+        # `hour` is a dev override (0-23) for testing time-of-day coaching; live otherwise.
+        hour = datetime.now().hour if hour is None else max(0, min(23, hour))
         if 5 <= hour < 11:
             time_of_day, remaining = "morning", 2
         elif 11 <= hour < 16:

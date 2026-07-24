@@ -186,8 +186,14 @@ export const api = {
   },
   // `date` is the client's LOCAL day (YYYY-MM-DD) so the coach scopes "today" to the day
   // the user is looking at, not a server clock (which is UTC and wrong near midnight).
-  coachTip: (date?: string) =>
-    request<CoachResponse>(`/api/coach/tip${date ? `?date=${encodeURIComponent(date)}` : ""}`),
+  // `hour` (0-23) is a dev override for the coach's time-of-day context.
+  coachTip: (date?: string, hour?: number) => {
+    const params = new URLSearchParams();
+    if (date) params.set("date", date);
+    if (hour != null) params.set("hour", String(hour));
+    const qs = params.toString();
+    return request<CoachResponse>(`/api/coach/tip${qs ? `?${qs}` : ""}`);
+  },
   // `date` scopes the thread to the client's local day, so a new day loads a fresh chat.
   coachHistory: (date?: string) =>
     request<{ messages?: CoachMessage[]; recommendations?: CoachRecommendation[] }>(
@@ -196,9 +202,9 @@ export const api = {
   // Live progress of the coach's current run (the tools it's calling). Cheap to poll
   // while a reply is generating so the UI can show it thinking.
   coachStatus: () => request<{ active: boolean; steps: string[] }>("/api/coach/status"),
-  coachMessage: (message: string, date?: string) =>
+  coachMessage: (message: string, date?: string, hour?: number) =>
     request<CoachResponse>("/api/coach/message", {
       method: "POST",
-      body: JSON.stringify({ message, date }),
+      body: JSON.stringify({ message, date, hour }),
     }),
 };
