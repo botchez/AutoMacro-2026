@@ -1,0 +1,1 @@
+"""NutriCoach backend package."""
