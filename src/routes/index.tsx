@@ -125,11 +125,11 @@ function AuthPage() {
         <div className="max-w-md text-center">
           <Mascot size={180} className="mx-auto animate-float" />
           <h1 className="mt-6 text-4xl font-extrabold tracking-tight">
-            Nutrition, but make it <span className="text-primary">fun</span>.
+            Nutrition that works for <span className="text-primary">real life</span>.
           </h1>
           <p className="mt-3 text-muted-foreground">
-            Snap meals, hit your macros, and get high-fives from your pocket coach. No spreadsheets.
-            No guilt.
+            Track meals, understand your macros, and receive practical guidance tailored to your
+            goals—all in one simple experience.
           </p>
 
           {/* Floating Scrollable Feature Showcase Carousel */}
