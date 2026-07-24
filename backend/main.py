@@ -14,6 +14,7 @@ from .db import connect, initialize_database, transaction, utc_now
 from .models import (
     AuthIn,
     AuthOut,
+    CoachHistoryOut,
     CoachMessageIn,
     CoachOut,
     GoalsIn,
@@ -287,6 +288,63 @@ def add_log(
     return {"id": meal_id}
 
 
+@app.put("/api/logs/{meal_id}")
+def update_log(
+    meal_id: str,
+    payload: MealIn,
+    user: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    owned = connection.execute(
+        "SELECT id FROM meals WHERE id = ? AND user_id = ?",
+        (meal_id, user["id"]),
+    ).fetchone()
+    if not owned:
+        raise HTTPException(status_code=404, detail="Meal not found")
+    with connection:
+        connection.execute(
+            "UPDATE meals SET log_date = ?, log_time = ? WHERE id = ?",
+            (payload.date, payload.time, meal_id),
+        )
+        connection.execute("DELETE FROM meal_items WHERE meal_id = ?", (meal_id,))
+        for item in payload.items:
+            connection.execute(
+                """
+                INSERT INTO meal_items
+                (id, meal_id, name, grams, calories, protein, carbs, fat, fdc_id, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.id or str(uuid4()),
+                    meal_id,
+                    item.name,
+                    item.grams,
+                    item.calories,
+                    item.protein,
+                    item.carbs,
+                    item.fat,
+                    item.fdcId,
+                    item.source,
+                ),
+            )
+    return {"id": meal_id}
+
+
+@app.delete("/api/logs/{meal_id}", status_code=204)
+def delete_log(
+    meal_id: str,
+    user: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    with connection:
+        result = connection.execute(
+            "DELETE FROM meals WHERE id = ? AND user_id = ?",
+            (meal_id, user["id"]),
+        )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Meal not found")
+
+
 @app.post("/api/vision/analyze", response_model=VisionOut)
 async def analyze_vision(
     image: UploadFile = File(...),
@@ -317,6 +375,14 @@ async def coach_tip(
 ):
     with connection:
         return await CoachService(connection).reply(user["id"])
+
+
+@app.get("/api/coach/history", response_model=CoachHistoryOut)
+def coach_history(
+    user: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    return CoachService(connection).history(user["id"])
 
 
 @app.post("/api/coach/message", response_model=CoachOut)

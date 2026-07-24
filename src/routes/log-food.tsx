@@ -1,15 +1,48 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Beef,
+  CalendarDays,
+  Camera,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock3,
+  Flame,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Scale,
+  Search,
+  Trash2,
+  Utensils,
+  Wheat,
+} from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { Mascot } from "@/components/Mascot";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useApp, type FoodItem, todayIso } from "@/lib/store";
-import { MOCK_FOOD_DB, scaleFood } from "@/lib/mock-foods";
-import { Camera, Scale, Trash2, Plus, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "@/lib/api";
+import { MOCK_FOOD_DB, scaleFood } from "@/lib/mock-foods";
+import {
+  sumMacros,
+  todayIso,
+  useApp,
+  type FoodItem,
+  type Macros,
+  type MealEntry,
+} from "@/lib/store";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/log-food")({
   head: () => ({
@@ -17,12 +50,7 @@ export const Route = createFileRoute("/log-food")({
       { title: "Log food — NutriCoach" },
       {
         name: "description",
-        content: "Scan, weigh, and log meals with the friendly NutriCoach food logger.",
-      },
-      { property: "og:title", content: "Log a meal with NutriCoach" },
-      {
-        property: "og:description",
-        content: "Batch add foods with our smart scan-and-weigh flow.",
+        content: "Choose a day and time, capture a meal, and confirm your macro log.",
       },
     ],
   }),
@@ -30,10 +58,31 @@ export const Route = createFileRoute("/log-food")({
 });
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
 function LogFood() {
-  const { user, goals, addMeal, logs, ready } = useApp();
+  const { user, goals, addMeal, updateMeal, deleteMeal, logs, ready } = useApp();
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const initialDate = useMemo(() => parseIsoDate(todayIso()), []);
+  const [selectedDate, setSelectedDate] = useState(todayIso());
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(initialDate));
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [mealHour, setMealHour] = useState(new Date().getHours().toString().padStart(2, "0"));
+  const [mealMinute, setMealMinute] = useState("00");
+  const [scaleReading, setScaleReading] = useState(0);
+  const [tareOffset, setTareOffset] = useState(0);
+  const [capturedWeight, setCapturedWeight] = useState(0);
+  const [scanning, setScanning] = useState(false);
+  const [detected, setDetected] = useState<FoodItem[]>([]);
+  const [mealItems, setMealItems] = useState<FoodItem[]>([]);
+  const [visionProvider, setVisionProvider] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [removingFoodId, setRemovingFoodId] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
 
   useEffect(() => {
     if (!ready) return;
@@ -41,56 +90,118 @@ function LogFood() {
     else if (!goals) navigate({ to: "/onboarding" });
   }, [ready, user, goals, navigate]);
 
-  // Day selector — last 7 days
-  const [selectedDate, setSelectedDate] = useState(todayIso());
-  const [hour, setHour] = useState(new Date().getHours().toString().padStart(2, "0"));
-  const [minute, setMinute] = useState(new Date().getMinutes().toString().padStart(2, "0"));
+  useEffect(
+    () => () => {
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
+    },
+    [imagePreview],
+  );
 
-  const days = useMemo(() => {
-    const arr: { iso: string; dow: string; d: number }[] = [];
-    const now = new Date();
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i);
-      arr.push({
-        iso: d.toISOString().slice(0, 10),
-        dow: d.toLocaleDateString(undefined, { weekday: "short" }),
-        d: d.getDate(),
-      });
-    }
-    return arr;
+  useEffect(() => {
+    const interval = window.setInterval(() => setCurrentTime(new Date()), 30_000);
+    return () => window.clearInterval(interval);
   }, []);
 
-  // Scanner mock state
-  const [weight, setWeight] = useState(0);
-  const [tareOffset, setTareOffset] = useState(0);
-  const [scanning, setScanning] = useState(false);
-  const [detected, setDetected] = useState<FoodItem[]>([]);
-  const [visionProvider, setVisionProvider] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const weekDays = useMemo(
+    () => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)),
+    [weekStart],
+  );
+  const mealTime = `${normalizeTimePart(mealHour, 23)}:${normalizeTimePart(mealMinute, 59)}`;
+  const displayedWeight = Math.max(0, scaleReading - tareOffset);
+  const selectedDay = logs.find((day) => day.date === selectedDate);
+  const mealTotals = useMemo(
+    () => sumMacros([{ id: "draft", time: mealTime, items: mealItems }]),
+    [mealItems, mealTime],
+  );
+  const dayTotals = useMemo(() => sumMacros(selectedDay?.meals ?? []), [selectedDay]);
+  const filteredFoods = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return MOCK_FOOD_DB.filter((food) => !query || food.name.toLowerCase().includes(query)).slice(
+      0,
+      7,
+    );
+  }, [search]);
 
-  const displayedWeight = Math.max(0, weight - tareOffset);
+  const chooseDate = (date: Date) => {
+    setSelectedDate(toIsoDate(date));
+    setWeekStart(startOfWeek(date));
+    setCalendarOpen(false);
+  };
+
+  const shiftWeek = (days: number) => {
+    const nextDate = addDays(parseIsoDate(selectedDate), days);
+    setSelectedDate(toIsoDate(nextDate));
+    setWeekStart(startOfWeek(nextDate));
+  };
+
+  const openLogEditor = (hour: number) => {
+    setMealHour(hour.toString().padStart(2, "0"));
+    setMealMinute("00");
+    setEditorOpen(true);
+  };
+
+  const openLogNow = () => {
+    const now = new Date();
+    const today = todayIso();
+    setSelectedDate(today);
+    setWeekStart(startOfWeek(parseIsoDate(today)));
+    setMealHour(now.getHours().toString().padStart(2, "0"));
+    setMealMinute(now.getMinutes().toString().padStart(2, "0"));
+    setEditorOpen(true);
+  };
+
+  const removeLoggedFood = async (meal: MealEntry, foodId: string) => {
+    setRemovingFoodId(foodId);
+    try {
+      if (meal.items.length === 1) {
+        await deleteMeal(meal.id);
+        toast.success("Food and empty meal removed");
+      } else {
+        await updateMeal(selectedDate, {
+          ...meal,
+          items: meal.items.filter((item) => item.id !== foodId),
+        });
+        toast.success("Logged food removed");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not remove that food");
+    } finally {
+      setRemovingFoodId(null);
+    }
+  };
+
+  const simulateScale = () => {
+    const reading = Math.round(60 + Math.random() * 340);
+    setScaleReading(reading + tareOffset);
+    toast("Scale reading updated", { description: `${reading}g on the platform.` });
+  };
+
+  const tare = () => {
+    setTareOffset(scaleReading);
+    setCapturedWeight(0);
+    toast.success("Scale tared to 0g");
+  };
 
   const captureWeight = () => {
-    // random plausible weight 40–400g
-    setWeight(Math.round(40 + Math.random() * 360));
-    toast.success("Weight captured!", { description: "Scale reading locked in." });
+    if (displayedWeight <= 0) {
+      toast.error("Place food on the scale or create a reading first.");
+      return;
+    }
+    setCapturedWeight(displayedWeight);
+    toast.success("Weight captured", { description: `${displayedWeight}g will guide detection.` });
   };
-  const tare = () => {
-    setTareOffset(weight);
-    toast("Scale tared to 0g");
-  };
+
   const captureImage = async (file: File) => {
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setImagePreview(URL.createObjectURL(file));
     setScanning(true);
     try {
-      const result = await api.analyze(file, displayedWeight);
-      const chosen = result.items.map((item) => ({ ...item, id: uid() }));
-      setDetected((previous) => [...previous, ...chosen]);
+      const result = await api.analyze(file, capturedWeight || displayedWeight);
+      const items = result.items.map((item) => ({ ...item, id: uid() }));
+      setDetected(items);
       setVisionProvider(result.provider);
-      toast.success(`Detected ${chosen.length} item${chosen.length === 1 ? "" : "s"}!`, {
-        description: result.cached
-          ? "Loaded from the vision cache."
-          : "Nutrition enriched through the food database.",
+      toast.success(`Found ${items.length} food${items.length === 1 ? "" : "s"}`, {
+        description: "Review portions before adding them to the meal.",
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not analyze that image");
@@ -100,296 +211,797 @@ function LogFood() {
     }
   };
 
-  const updateDetected = (id: string, grams: number) => {
-    setDetected((prev) =>
-      prev.map((it) => {
-        if (it.id !== id) return it;
-        const ref = MOCK_FOOD_DB.find((f) => f.name === it.name);
-        const macros = ref
-          ? scaleFood(ref.per100, grams)
-          : {
-              calories: Math.round((it.calories / it.grams) * grams),
-              protein: Math.round((it.protein / it.grams) * grams * 10) / 10,
-              carbs: Math.round((it.carbs / it.grams) * grams * 10) / 10,
-              fat: Math.round((it.fat / it.grams) * grams * 10) / 10,
-            };
-        return { ...it, grams, ...macros };
+  const addReferenceFood = (food: (typeof MOCK_FOOD_DB)[number]) => {
+    const grams = capturedWeight > 0 ? capturedWeight : 100;
+    setMealItems((current) => [
+      ...current,
+      { id: uid(), name: food.name, grams, ...scaleFood(food.per100, grams), source: "manual" },
+    ]);
+    toast.success(`${food.name} added to this meal`);
+  };
+
+  const resizeItem = (
+    collection: FoodItem[],
+    setCollection: React.Dispatch<React.SetStateAction<FoodItem[]>>,
+    id: string,
+    grams: number,
+  ) => {
+    setCollection(
+      collection.map((item) => {
+        if (item.id !== id) return item;
+        const safeGrams = Math.max(1, grams);
+        const ratio = safeGrams / item.grams;
+        return {
+          ...item,
+          grams: safeGrams,
+          calories: Math.round(item.calories * ratio),
+          protein: round(item.protein * ratio),
+          carbs: round(item.carbs * ratio),
+          fat: round(item.fat * ratio),
+        };
       }),
     );
   };
 
-  const removeDetected = (id: string) => setDetected((prev) => prev.filter((it) => it.id !== id));
-
-  const addDetectedToBatch = () => {
-    setBatch((b) => [...b, ...detected]);
+  const addDetectedToMeal = () => {
+    if (!detected.length) return;
+    setMealItems((current) => [...current, ...detected]);
     setDetected([]);
-    setWeight(0);
-    setTareOffset(0);
-    toast.success("Added to batch");
+    toast.success("Detected foods added to this meal");
   };
 
-  // Batch
-  const [batch, setBatch] = useState<FoodItem[]>([]);
-
-  const submitBatch = async () => {
-    if (!batch.length) {
-      toast.error("Add at least one food first!");
-      return;
-    }
+  const saveMeal = async () => {
+    if (!mealItems.length) return;
+    setSaving(true);
     try {
-      await addMeal(selectedDate, {
-        id: uid(),
-        time: `${hour}:${minute}`,
-        items: batch,
+      await addMeal(selectedDate, { id: uid(), time: mealTime, items: mealItems });
+      toast.success("Meal confirmed and saved", {
+        description: "Your timeline, dashboard, and coach are now updated.",
       });
-      setBatch([]);
-      toast.success("Meal logged! 🎉", { description: "Saved to your nutrition history." });
-      navigate({ to: "/dashboard" });
+      setMealItems([]);
+      setEditorOpen(false);
+      setImagePreview(null);
+      setCapturedWeight(0);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save meal");
+      toast.error(error instanceof Error ? error.message : "Could not save the meal");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const batchTotals = batch.reduce(
-    (a, it) => ({
-      calories: a.calories + it.calories,
-      protein: a.protein + it.protein,
-      carbs: a.carbs + it.carbs,
-      fat: a.fat + it.fat,
-    }),
-    { calories: 0, protein: 0, carbs: 0, fat: 0 },
-  );
-
-  // Coach suggestions
-  const suggestion = useMemo(() => {
-    if (!goals) return "";
-    const dayLog = logs.find((d) => d.date === selectedDate);
-    const soFar = (dayLog?.meals ?? []).flatMap((m) => m.items).concat(batch);
-    const totals = soFar.reduce(
-      (a, it) => ({
-        calories: a.calories + it.calories,
-        protein: a.protein + it.protein,
-        carbs: a.carbs + it.carbs,
-        fat: a.fat + it.fat,
-      }),
-      { calories: 0, protein: 0, carbs: 0, fat: 0 },
-    );
-    const gaps: string[] = [];
-    if (totals.protein < goals.protein * 0.5) gaps.push("protein (try eggs, yogurt, or chicken)");
-    if (totals.carbs < goals.carbs * 0.5) gaps.push("carbs (rice, oats, or fruit)");
-    if (totals.fat < goals.fat * 0.5) gaps.push("healthy fats (avocado, olive oil, nuts)");
-    if (!gaps.length) return "You're crushing it — keep the balance going!";
-    return `You're low on ${gaps.join(" and ")}. Consider adding some to this meal!`;
-  }, [batch, goals, logs, selectedDate]);
+  if (!goals) return null;
 
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="space-y-5">
         <header className="flex items-center gap-4">
           <Mascot size={64} className="animate-float shrink-0" />
-          <div className="min-w-0">
-            <div className="text-sm text-muted-foreground">Log a meal</div>
-            <h1 className="text-2xl md:text-3xl">Snap, weigh, log</h1>
-            <div className="text-xs text-muted-foreground">I'll cheer you on the whole way 🎉</div>
+          <div>
+            <div className="text-sm font-semibold text-primary">Log food</div>
+            <h1 className="text-2xl font-black md:text-3xl">Your food timeline</h1>
+            <p className="text-sm text-muted-foreground">
+              Pick a day and log food at the time you ate it.
+            </p>
           </div>
         </header>
 
-        {/* Day selector */}
-        <div className="card-soft p-3 flex gap-2 overflow-x-auto">
-          {days.map((d) => (
-            <button
-              key={d.iso}
-              onClick={() => setSelectedDate(d.iso)}
-              className={cn(
-                "shrink-0 rounded-2xl px-4 py-2 text-center bounce-tap min-w-[64px]",
-                selectedDate === d.iso ? "bg-primary text-primary-foreground shadow" : "bg-muted",
-              )}
-            >
-              <div className="text-[10px] uppercase font-bold opacity-80">{d.dow}</div>
-              <div className="text-lg font-extrabold">{d.d}</div>
-            </button>
-          ))}
-        </div>
+        <WeekBar
+          days={weekDays}
+          selectedDate={selectedDate}
+          onSelect={chooseDate}
+          onPrevious={() => shiftWeek(-7)}
+          onNext={() => shiftWeek(7)}
+          calendarOpen={calendarOpen}
+          onCalendarOpenChange={setCalendarOpen}
+        />
 
-        {/* Time */}
-        <div className="card-soft p-4 flex items-center gap-3">
-          <div className="text-sm font-bold">Time</div>
-          <Input
-            type="number"
-            min={0}
-            max={23}
-            value={hour}
-            onChange={(e) => setHour(e.target.value.padStart(2, "0").slice(-2))}
-            className="w-20 text-center font-bold text-lg"
-          />
-          <span className="text-lg font-extrabold">:</span>
-          <Input
-            type="number"
-            min={0}
-            max={59}
-            value={minute}
-            onChange={(e) => setMinute(e.target.value.padStart(2, "0").slice(-2))}
-            className="w-20 text-center font-bold text-lg"
-          />
-        </div>
-
-        {/* Scanner */}
-        <div className="card-soft p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg">📸 Smart food scanner</h2>
-            <div className="text-xs text-muted-foreground">
-              {visionProvider ? `Cascade: ${visionProvider}` : "Vision + FDC cascade"}
-            </div>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-[1fr_1fr]">
-            {/* Camera */}
-            <div className="rounded-2xl border-2 border-dashed border-primary/40 bg-primary/5 p-6 text-center min-h-[180px] flex flex-col items-center justify-center">
-              {scanning ? (
-                <>
-                  <RefreshCw className="h-10 w-10 animate-spin text-primary" />
-                  <div className="mt-2 text-sm font-bold">Analyzing your plate…</div>
-                </>
-              ) : (
-                <>
-                  <Camera className="h-10 w-10 text-primary" />
-                  <div className="mt-2 text-sm font-bold">Point at your plate</div>
-                  <div className="text-xs text-muted-foreground">Tap capture to detect foods</div>
-                </>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="sr-only"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) void captureImage(file);
-                }}
-              />
-              <Button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={scanning}
-                className="mt-4 rounded-full font-bold bounce-tap"
-              >
-                <Camera className="mr-2 h-4 w-4" /> Choose or capture image
-              </Button>
-            </div>
-
-            {/* Scale */}
-            <div className="rounded-2xl bg-gradient-to-br from-sky/15 to-primary/10 p-6 flex flex-col items-center justify-center">
-              <Scale className="h-8 w-8 text-sky-600" />
-              <div className="mt-2 text-5xl font-black tabular-nums">
-                {displayedWeight}
-                <span className="text-xl text-muted-foreground">g</span>
+        <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <section className="card-soft overflow-hidden">
+            <div className="flex items-center justify-between border-b bg-white px-5 py-4">
+              <div>
+                <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
+                  Daily timeline
+                </div>
+                <h2 className="mt-0.5 text-xl font-black">{formatLongDate(selectedDate)}</h2>
               </div>
-              <div className="text-xs text-muted-foreground">Live scale reading</div>
-              <div className="mt-4 flex gap-2">
-                <Button variant="outline" onClick={tare} className="rounded-full bounce-tap">
-                  Tare
-                </Button>
-                <Button onClick={captureWeight} className="rounded-full font-bold bounce-tap">
-                  Capture Weight
-                </Button>
-              </div>
+              <span className="rounded-full bg-primary/8 px-3 py-1 text-xs font-bold text-primary">
+                {selectedDay?.meals.reduce((count, meal) => count + meal.items.length, 0) ?? 0}{" "}
+                foods logged
+              </span>
             </div>
-          </div>
 
-          {detected.length > 0 && (
-            <div className="mt-5">
-              <div className="text-sm font-bold mb-2">Detected items — tweak portions:</div>
-              <ul className="space-y-2">
-                {detected.map((it) => (
-                  <li
-                    key={it.id}
-                    className="rounded-2xl border p-3 flex items-center gap-3 animate-pop"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold truncate">{it.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {it.calories} kcal · P {it.protein} · C {it.carbs} · F {it.fat}
-                      </div>
-                    </div>
-                    <Input
-                      type="number"
-                      value={it.grams}
-                      onChange={(e) => updateDetected(it.id, Number(e.target.value))}
-                      className="w-20 text-center font-bold"
-                    />
-                    <span className="text-xs text-muted-foreground">g</span>
-                    <button
-                      onClick={() => removeDetected(it.id)}
-                      className="text-destructive p-1 bounce-tap"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <Button
-                onClick={addDetectedToBatch}
-                className="mt-3 w-full rounded-full font-bold bounce-tap"
-              >
-                <Plus className="mr-1 h-4 w-4" /> Add to meal batch
-              </Button>
+            <div className="divide-y">
+              {HOURS.map((hour, index) => {
+                const meals =
+                  selectedDay?.meals.filter(
+                    (meal) => Number.parseInt(meal.time.split(":")[0] ?? "0", 10) === hour,
+                  ) ?? [];
+                return (
+                  <TimelineRow
+                    key={hour}
+                    hour={hour}
+                    meals={meals}
+                    first={index === 0}
+                    last={index === HOURS.length - 1}
+                    onLog={() => openLogEditor(hour)}
+                    onRemoveFood={(meal, foodId) => void removeLoggedFood(meal, foodId)}
+                    removingFoodId={removingFoodId}
+                  />
+                );
+              })}
             </div>
-          )}
-        </div>
+          </section>
 
-        {/* Coach suggestions */}
-        <div className="card-soft p-4 flex items-start gap-3 bg-gradient-to-r from-sun/15 to-primary/10">
-          <Mascot size={56} className="animate-float shrink-0" />
-          <div className="min-w-0">
-            <div className="text-xs uppercase tracking-wider text-primary font-bold">Coach tip</div>
-            <div className="text-sm font-semibold">{suggestion}</div>
-          </div>
-        </div>
-
-        {/* Batch */}
-        <div className="card-soft p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg">🥗 In this meal ({batch.length})</h2>
-            <div className="text-xs text-muted-foreground">
-              {batchTotals.calories} kcal · P {batchTotals.protein.toFixed(0)} · C{" "}
-              {batchTotals.carbs.toFixed(0)} · F {batchTotals.fat.toFixed(0)}
-            </div>
-          </div>
-
-          {batch.length ? (
-            <ul className="space-y-2">
-              {batch.map((it) => (
-                <li key={it.id} className="rounded-xl bg-muted p-3 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold truncate">{it.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {it.grams}g · {it.calories} kcal
-                    </div>
+          <aside className="space-y-5 self-start xl:sticky xl:top-5">
+            <section className="rounded-2xl border bg-white p-5 shadow-sm">
+              <div className="flex items-center gap-3">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-primary shadow-sm">
+                  <Clock3 className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
+                    Quick log
                   </div>
-                  <button
-                    onClick={() => setBatch((b) => b.filter((x) => x.id !== it.id))}
-                    className="text-destructive p-1 bounce-tap"
+                  <div className="text-lg font-black">Log food now</div>
+                </div>
+                <div className="shrink-0 border-l pl-4 text-right">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-muted-foreground">
+                    Current time
+                  </div>
+                  <time
+                    className="text-xl font-black tabular-nums"
+                    dateTime={currentTime.toISOString()}
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-center py-6 text-sm text-muted-foreground">
-              No items yet. Capture an image or add from the scanner.
-            </div>
-          )}
-
-          <Button
-            onClick={submitBatch}
-            size="lg"
-            className="mt-4 w-full rounded-full font-bold bounce-tap"
-          >
-            Save meal 🎉
-          </Button>
+                    {formatCurrentTime(currentTime)}
+                  </time>
+                </div>
+              </div>
+              <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                Open the food scanner using today’s date and the current hour and minute.
+              </p>
+              <Button onClick={openLogNow} className="mt-4 w-full rounded-xl font-extrabold">
+                <Plus className="mr-2 h-4 w-4" /> Log now
+              </Button>
+            </section>
+            <MacroPanel totals={dayTotals} goals={goals} />
+            <section className="rounded-2xl border border-dashed bg-primary/5 p-5">
+              <div className="text-sm font-extrabold">Ready to log?</div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                Press + Log beside any hour. Food selection, review, and confirmation all happen
+                inside that popup.
+              </p>
+            </section>
+          </aside>
         </div>
       </div>
+
+      <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+        <DialogContent className="flex h-[92vh] max-h-[860px] w-[calc(100%-1rem)] flex-col overflow-hidden rounded-3xl p-0 sm:max-w-5xl">
+          <DialogHeader className="shrink-0 border-b px-5 py-4 text-left">
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">
+                <Plus className="h-4 w-4" />
+              </span>
+              Log food at {formatTime(mealTime)}
+            </DialogTitle>
+            <DialogDescription>
+              {formatLongDate(selectedDate)} · Scan the plate or add food manually.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid min-h-0 flex-1 grid-rows-[minmax(280px,42%)_minmax(0,1fr)] lg:grid-cols-[1.1fr_0.9fr] lg:grid-rows-1">
+            <div className="flex min-h-0 flex-col overflow-hidden border-b lg:border-b-0 lg:border-r">
+              <div className="flex shrink-0 items-center justify-between px-5 py-3">
+                <div>
+                  <h3 className="flex items-center gap-2 font-black">
+                    <Camera className="h-4 w-4 text-primary" /> Camera food detection
+                  </h3>
+                  <p className="text-xs text-muted-foreground">Capture your plate for analysis.</p>
+                </div>
+                <span className="rounded-full bg-primary/8 px-2.5 py-1 text-[10px] font-extrabold uppercase text-primary">
+                  {visionProvider ?? "Ready"}
+                </span>
+              </div>
+
+              <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-foreground/95 p-5 text-white">
+                {imagePreview ? (
+                  <img
+                    src={imagePreview}
+                    alt="Meal ready for food detection"
+                    className="absolute inset-0 h-full w-full object-cover opacity-70"
+                  />
+                ) : (
+                  <div className="absolute inset-5 rounded-2xl border border-dashed border-white/25" />
+                )}
+                <div className="relative z-10 text-center">
+                  {scanning ? (
+                    <>
+                      <Loader2 className="mx-auto h-10 w-10 animate-spin text-sun" />
+                      <div className="mt-3 font-extrabold">Analyzing your plate…</div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-white/15 backdrop-blur">
+                        <Camera className="h-7 w-7" />
+                      </span>
+                      <div className="mt-3 font-extrabold">
+                        {imagePreview ? "Capture another angle" : "Show your meal"}
+                      </div>
+                      <div className="mt-1 text-xs text-white/65">
+                        Camera opens on supported phones
+                      </div>
+                    </>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="sr-only"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void captureImage(file);
+                    }}
+                  />
+                  <Button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={scanning}
+                    variant="secondary"
+                    className="mt-4 rounded-full font-bold"
+                  >
+                    <Camera className="mr-2 h-4 w-4" /> Capture image
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="min-h-0 space-y-4 overflow-y-auto p-5">
+              <section className="rounded-2xl bg-gradient-to-br from-sky/10 to-primary/10 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                      <Scale className="h-4 w-4 text-sky-600" /> Scale display
+                    </div>
+                    <div className="mt-1 text-4xl font-black tabular-nums">
+                      {displayedWeight}
+                      <span className="ml-1 text-base text-muted-foreground">g</span>
+                    </div>
+                    <div className="text-xs font-bold text-primary">
+                      {capturedWeight > 0 ? `${capturedWeight}g captured` : "Waiting to capture"}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={tare} className="rounded-xl">
+                      Tare
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={simulateScale}
+                      className="rounded-xl"
+                    >
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" /> Reading
+                    </Button>
+                  </div>
+                </div>
+                <Button onClick={captureWeight} className="mt-3 w-full rounded-xl font-bold">
+                  <Scale className="mr-2 h-4 w-4" /> Capture weight
+                </Button>
+              </section>
+
+              {detected.length > 0 && (
+                <section className="rounded-2xl border p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div>
+                      <div className="font-extrabold">Detected foods</div>
+                      <div className="text-xs text-muted-foreground">
+                        Adjust grams before adding.
+                      </div>
+                    </div>
+                    <Button onClick={addDetectedToMeal} size="sm" className="rounded-full">
+                      <Plus className="mr-1 h-4 w-4" /> Add all
+                    </Button>
+                  </div>
+                  <FoodRows
+                    items={detected}
+                    onResize={(id, grams) => resizeItem(detected, setDetected, id, grams)}
+                    onRemove={(id) =>
+                      setDetected((current) => current.filter((item) => item.id !== id))
+                    }
+                  />
+                </section>
+              )}
+
+              <section>
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-black">Add food</h3>
+                    <p className="text-xs text-muted-foreground">Search the quick food library.</p>
+                  </div>
+                  <div className="flex items-center gap-1 rounded-xl border bg-muted/35 px-2">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={mealHour}
+                      onChange={(event) => setMealHour(event.target.value)}
+                      onBlur={() => setMealHour(normalizeTimePart(mealHour, 23))}
+                      aria-label="Meal hour"
+                      className="h-9 w-12 border-0 bg-transparent p-1 text-center font-bold shadow-none"
+                    />
+                    <span className="font-black">:</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={mealMinute}
+                      onChange={(event) => setMealMinute(event.target.value)}
+                      onBlur={() => setMealMinute(normalizeTimePart(mealMinute, 59))}
+                      aria-label="Meal minute"
+                      className="h-9 w-12 border-0 bg-transparent p-1 text-center font-bold shadow-none"
+                    />
+                  </div>
+                </div>
+                <div className="relative mt-3">
+                  <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search chicken, rice, yogurt…"
+                    className="h-10 rounded-xl pl-9"
+                  />
+                </div>
+                <div className="mt-2 max-h-64 space-y-1 overflow-y-auto pr-1">
+                  {filteredFoods.map((food) => (
+                    <button
+                      key={food.name}
+                      onClick={() => addReferenceFood(food)}
+                      className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-muted"
+                    >
+                      <div>
+                        <div className="text-sm font-bold">{food.name}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Per 100g · {food.per100.calories} kcal · {food.per100.protein}g protein
+                        </div>
+                      </div>
+                      <span className="grid h-7 w-7 place-items-center rounded-full bg-primary/10 text-primary">
+                        <Plus className="h-4 w-4" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border bg-primary/5 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
+                      Review meal
+                    </div>
+                    <h3 className="mt-0.5 text-lg font-black">
+                      {mealItems.length} item{mealItems.length === 1 ? "" : "s"} selected
+                    </h3>
+                  </div>
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-extrabold shadow-sm">
+                    {Math.round(mealTotals.calories)} kcal
+                  </span>
+                </div>
+
+                <div className="mt-3 max-h-52 overflow-y-auto pr-1">
+                  {mealItems.length ? (
+                    <FoodRows
+                      items={mealItems}
+                      onResize={(id, grams) => resizeItem(mealItems, setMealItems, id, grams)}
+                      onRemove={(id) =>
+                        setMealItems((current) => current.filter((item) => item.id !== id))
+                      }
+                    />
+                  ) : (
+                    <div className="rounded-xl border border-dashed bg-white/60 p-4 text-center text-xs text-muted-foreground">
+                      Scan your plate or choose a food above to review it here.
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-4 gap-2">
+                  <ConfirmMacro label="Calories" value={mealTotals.calories} />
+                  <ConfirmMacro label="Protein" value={mealTotals.protein} />
+                  <ConfirmMacro label="Carbs" value={mealTotals.carbs} />
+                  <ConfirmMacro label="Fat" value={mealTotals.fat} />
+                </div>
+
+                <Button
+                  onClick={() => {
+                    if (!mealItems.length) {
+                      toast.error("Add at least one food before confirming.");
+                      return;
+                    }
+                    void saveMeal();
+                  }}
+                  disabled={saving || !mealItems.length}
+                  className="mt-4 h-11 w-full rounded-xl font-extrabold"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving meal…
+                    </>
+                  ) : (
+                    <>
+                      <Check className="mr-2 h-4 w-4" /> Review complete · Confirm and save
+                    </>
+                  )}
+                </Button>
+              </section>
+
+              <Button
+                onClick={() => setEditorOpen(false)}
+                variant="ghost"
+                className="w-full rounded-xl font-bold"
+              >
+                Close and keep editing later
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
+}
+
+function WeekBar({
+  days,
+  selectedDate,
+  onSelect,
+  onPrevious,
+  onNext,
+  calendarOpen,
+  onCalendarOpenChange,
+}: {
+  days: Date[];
+  selectedDate: string;
+  onSelect: (date: Date) => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  calendarOpen: boolean;
+  onCalendarOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <section className="relative rounded-2xl border bg-white p-2 shadow-sm">
+      <div className="flex items-stretch gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onPrevious}
+          aria-label="Previous week"
+          className="h-auto shrink-0 rounded-xl"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </Button>
+
+        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+          {days.map((date) => {
+            const iso = toIsoDate(date);
+            const selected = iso === selectedDate;
+            const today = iso === todayIso();
+            return (
+              <button
+                key={iso}
+                type="button"
+                onClick={() => onSelect(date)}
+                className={cn(
+                  "min-w-14 flex-1 rounded-xl px-2 py-2 text-center transition-colors",
+                  selected
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "bg-muted/55 hover:bg-muted",
+                )}
+              >
+                <div className="text-[10px] font-extrabold uppercase opacity-75">
+                  {today ? "Today" : date.toLocaleDateString(undefined, { weekday: "short" })}
+                </div>
+                <div className="text-lg font-black">{date.getDate()}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onNext}
+          aria-label="Next week"
+          className="h-auto shrink-0 rounded-xl"
+        >
+          <ChevronRight className="h-5 w-5" />
+        </Button>
+
+        <Popover open={calendarOpen} onOpenChange={onCalendarOpenChange}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Open calendar"
+              className="h-12 w-12 shrink-0 self-center rounded-md border-primary/20 text-primary"
+            >
+              <CalendarDays className="h-5 w-5" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-auto rounded-2xl p-0 shadow-xl">
+            <Calendar
+              mode="single"
+              selected={parseIsoDate(selectedDate)}
+              onSelect={(date) => {
+                if (date) onSelect(date);
+              }}
+              initialFocus
+            />
+          </PopoverContent>
+        </Popover>
+      </div>
+    </section>
+  );
+}
+
+function TimelineRow({
+  hour,
+  meals,
+  first,
+  last,
+  onLog,
+  onRemoveFood,
+  removingFoodId,
+}: {
+  hour: number;
+  meals: MealEntry[];
+  first: boolean;
+  last: boolean;
+  onLog: () => void;
+  onRemoveFood: (meal: MealEntry, foodId: string) => void;
+  removingFoodId: string | null;
+}) {
+  const totals = sumMacros(meals);
+  return (
+    <div className="grid min-h-20 grid-cols-[58px_22px_minmax(0,1fr)_auto] items-stretch px-3 sm:grid-cols-[72px_28px_minmax(0,1fr)_auto] sm:px-5">
+      <div className="pt-5 text-right text-xs font-extrabold text-muted-foreground">
+        {formatHour(hour)}
+      </div>
+      <div className="relative mx-auto w-full">
+        {!first && <div className="absolute left-1/2 top-0 h-5 w-px bg-primary/20" />}
+        {!last && <div className="absolute bottom-0 left-1/2 top-5 w-px bg-primary/20" />}
+        <div
+          className={cn(
+            "absolute left-1/2 top-5 h-3 w-3 -translate-x-1/2 rounded-full border-2 border-white shadow-sm",
+            meals.length ? "bg-primary" : "bg-primary/25",
+          )}
+        />
+      </div>
+      <div className="min-w-0 py-3 pr-2">
+        {meals.length ? (
+          <div className="space-y-1.5">
+            {meals.map((meal) => (
+              <div key={meal.id} className="overflow-hidden rounded-xl border bg-white">
+                <div className="flex items-center justify-between border-b bg-primary/5 px-3 py-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-primary">
+                    Meal at {formatTime(meal.time)}
+                  </span>
+                  <span className="text-[10px] font-bold text-muted-foreground">
+                    {Math.round(sumMacros([meal]).calories)} kcal total
+                  </span>
+                </div>
+                <div className="divide-y">
+                  {meal.items.map((item) => (
+                    <div key={item.id} className="flex items-center gap-2 px-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-extrabold">{item.name}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {Math.round(item.grams)}g · {Math.round(item.calories)} kcal · P{" "}
+                          {round(item.protein)} · C {round(item.carbs)} · F {round(item.fat)}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveFood(meal, item.id)}
+                        disabled={removingFoodId === item.id}
+                        aria-label={`Remove logged ${item.name}`}
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+                      >
+                        {removingFoodId === item.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="text-[10px] font-bold text-muted-foreground">
+              {Math.round(totals.calories)} kcal in this hour
+            </div>
+          </div>
+        ) : (
+          <div className="pt-2 text-xs text-muted-foreground/60">No food logged</div>
+        )}
+      </div>
+      <div className="flex items-start py-3">
+        <Button
+          type="button"
+          onClick={onLog}
+          size="sm"
+          variant={meals.length ? "outline" : "default"}
+          className="rounded-full font-bold"
+        >
+          <Plus className="mr-1 h-3.5 w-3.5" /> {meals.length ? "Log more" : "Log"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function FoodRows({
+  items,
+  onResize,
+  onRemove,
+}: {
+  items: FoodItem[];
+  onResize: (id: string, grams: number) => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <ul className="space-y-2">
+      {items.map((item) => (
+        <li key={item.id} className="flex items-center gap-2 rounded-xl border p-3">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-extrabold">{item.name}</div>
+            <div className="text-[11px] text-muted-foreground">
+              {Math.round(item.calories)} kcal · P {round(item.protein)} · C {round(item.carbs)} · F{" "}
+              {round(item.fat)}
+            </div>
+          </div>
+          <div className="relative">
+            <Input
+              type="number"
+              min={1}
+              value={Math.round(item.grams)}
+              onChange={(event) => onResize(item.id, Number(event.target.value))}
+              aria-label={`${item.name} weight in grams`}
+              className="h-9 w-18 rounded-lg pr-6 text-right text-sm font-bold"
+            />
+            <span className="pointer-events-none absolute right-2 top-2.5 text-[10px] text-muted-foreground">
+              g
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onRemove(item.id)}
+            aria-label={`Remove ${item.name}`}
+            className="rounded-lg p-2 text-destructive hover:bg-destructive/10"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MacroPanel({ totals, goals }: { totals: Macros; goals: Macros }) {
+  const items = [
+    {
+      label: "Calories",
+      value: totals.calories,
+      goal: goals.calories,
+      icon: Flame,
+      color: "bg-leaf",
+    },
+    { label: "Protein", value: totals.protein, goal: goals.protein, icon: Beef, color: "bg-mango" },
+    { label: "Carbs", value: totals.carbs, goal: goals.carbs, icon: Wheat, color: "bg-sky" },
+    { label: "Fat", value: totals.fat, goal: goals.fat, icon: Utensils, color: "bg-berry" },
+  ];
+  return (
+    <section className="card-soft p-5">
+      <div className="mb-4">
+        <h2 className="text-lg font-black">Daily macros</h2>
+        <p className="text-xs text-muted-foreground">Based on saved meals for this date.</p>
+      </div>
+      <div className="space-y-3">
+        {items.map(({ label, value, goal, icon: Icon, color }) => {
+          const percent = Math.min(100, Math.round((value / goal) * 100));
+          return (
+            <div key={label}>
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 font-bold">
+                  <Icon className="h-3.5 w-3.5 text-primary" /> {label}
+                </div>
+                <div className="text-muted-foreground">
+                  <span className="font-extrabold text-foreground">{Math.round(value)}</span> /{" "}
+                  {Math.round(goal)}
+                </div>
+              </div>
+              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn("h-full rounded-full", color)}
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ConfirmMacro({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl bg-muted p-2 text-center">
+      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className="text-sm font-extrabold">{Math.round(value)}</div>
+    </div>
+  );
+}
+
+function parseIsoDate(date: string) {
+  return new Date(`${date}T12:00:00`);
+}
+
+function toIsoDate(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
+function startOfWeek(date: Date) {
+  const start = new Date(date);
+  const offset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - offset);
+  start.setHours(12, 0, 0, 0);
+  return start;
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function formatLongDate(date: string) {
+  return parseIsoDate(date).toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatHour(hour: number) {
+  return new Date(2000, 0, 1, hour).toLocaleTimeString(undefined, {
+    hour: "numeric",
+  });
+}
+
+function formatTime(time: string) {
+  const [hour = "0", minute = "0"] = time.split(":");
+  return new Date(2000, 0, 1, Number(hour), Number(minute)).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatCurrentTime(date: Date) {
+  return date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function normalizeTimePart(value: string, max: number) {
+  const number = Math.min(max, Math.max(0, Number.parseInt(value, 10) || 0));
+  return number.toString().padStart(2, "0");
+}
+
+function round(value: number) {
+  return Math.round(value * 10) / 10;
 }

@@ -14,6 +14,21 @@ export type VisionResponse = {
   provider: string;
   cached: boolean;
 };
+export type CoachRecommendation = {
+  name: string;
+  reason: string;
+  serving: string;
+};
+export type CoachMessage = {
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+};
+export type CoachResponse = {
+  message: string;
+  source: string;
+  recommendations?: CoachRecommendation[];
+};
 
 function token() {
   return localStorage.getItem(TOKEN_KEY);
@@ -70,6 +85,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ...meal, date }),
     }),
+  updateMeal: (date: string, meal: MealEntry) =>
+    request<{ id: string }>(`/api/logs/${meal.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ ...meal, date }),
+    }),
+  deleteMeal: (mealId: string) =>
+    request<void>(`/api/logs/${mealId}`, {
+      method: "DELETE",
+    }),
   analyze: (image: File, weight?: number) => {
     const form = new FormData();
     form.append("image", image);
@@ -79,9 +103,13 @@ export const api = {
       body: form,
     });
   },
-  coachTip: () => request<{ message: string; source: string }>("/api/coach/tip"),
+  coachTip: () => request<CoachResponse>("/api/coach/tip"),
+  coachHistory: () =>
+    request<{ messages?: CoachMessage[]; recommendations?: CoachRecommendation[] }>(
+      "/api/coach/history",
+    ),
   coachMessage: (message: string) =>
-    request<{ message: string; source: string }>("/api/coach/message", {
+    request<CoachResponse>("/api/coach/message", {
       method: "POST",
       body: JSON.stringify({ message }),
     }),

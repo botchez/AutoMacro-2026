@@ -62,9 +62,27 @@ class CoachMessageIn(ApiModel):
     message: str = Field(min_length=1, max_length=2_000)
 
 
+class CoachRecommendation(ApiModel):
+    name: str
+    reason: str
+    serving: str
+
+
+class CoachMessageOut(ApiModel):
+    role: Literal["user", "assistant"]
+    content: str
+    createdAt: str
+
+
 class CoachOut(ApiModel):
     message: str
     source: Literal["openai", "rules"]
+    recommendations: list[CoachRecommendation]
+
+
+class CoachHistoryOut(ApiModel):
+    messages: list[CoachMessageOut]
+    recommendations: list[CoachRecommendation]
 
 
 class VisionFood(ApiModel):

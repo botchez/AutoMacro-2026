@@ -72,9 +72,48 @@ class ApiFlowTests(unittest.TestCase):
         }
         response = self.client.post("/api/logs", headers=self.headers, json=meal)
         self.assertEqual(response.status_code, 201, response.text)
+        meal["time"] = "13:15"
+        meal["items"][0]["grams"] = 220
+        updated = self.client.put(
+            "/api/logs/test-meal", headers=self.headers, json=meal
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        state = self.client.get("/api/state", headers=self.headers).json()
+        saved = next(
+            meal
+            for day in state["logs"]
+            for meal in day["meals"]
+            if meal["id"] == "test-meal"
+        )
+        self.assertEqual(saved["time"], "13:15")
+        self.assertEqual(saved["items"][0]["grams"], 220)
         coach = self.client.get("/api/coach/tip", headers=self.headers)
         self.assertEqual(coach.status_code, 200)
         self.assertTrue(coach.json()["message"])
+        self.assertTrue(coach.json()["recommendations"])
+        question = self.client.post(
+            "/api/coach/message",
+            headers=self.headers,
+            json={"message": "What should I eat next?"},
+        )
+        self.assertEqual(question.status_code, 200)
+        protein_names = [
+            item["name"] for item in question.json()["recommendations"]
+        ]
+        dinner = self.client.post(
+            "/api/coach/message",
+            headers=self.headers,
+            json={"message": "Help me balance dinner"},
+        )
+        self.assertEqual(dinner.status_code, 200)
+        dinner_names = [item["name"] for item in dinner.json()["recommendations"]]
+        self.assertNotEqual(protein_names, dinner_names)
+        history = self.client.get("/api/coach/history", headers=self.headers)
+        self.assertEqual(history.status_code, 200)
+        self.assertGreaterEqual(len(history.json()["messages"]), 3)
+        self.assertTrue(history.json()["recommendations"])
+        deleted = self.client.delete("/api/logs/test-meal", headers=self.headers)
+        self.assertEqual(deleted.status_code, 204)
 
     def test_vision_fallback_and_cache(self):
         image = b"\x89PNG\r\n\x1a\n" + b"test-image-content"

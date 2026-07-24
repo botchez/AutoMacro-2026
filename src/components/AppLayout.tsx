@@ -2,7 +2,6 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { LayoutDashboard, Utensils, History, LogOut, Menu, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Mascot } from "./Mascot";
-import { FloatingCoach } from "./FloatingCoach";
 import { useApp } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -97,7 +96,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <main className="flex-1 min-w-0 pt-16 md:pt-0">
         <div className="mx-auto max-w-6xl p-4 md:p-8">{children}</div>
       </main>
-      <FloatingCoach />
     </div>
   );
 }

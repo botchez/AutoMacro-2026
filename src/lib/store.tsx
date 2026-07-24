@@ -57,6 +57,8 @@ type Ctx = State & {
   logout: () => Promise<void>;
   setGoals: (goals: Goals) => Promise<void>;
   addMeal: (date: string, meal: MealEntry) => Promise<void>;
+  updateMeal: (date: string, meal: MealEntry) => Promise<void>;
+  deleteMeal: (mealId: string) => Promise<void>;
   refresh: () => Promise<void>;
   getDay: (date: string) => DayLog | undefined;
 };
@@ -131,6 +133,37 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const updateMeal = useCallback(async (date: string, meal: MealEntry) => {
+    await api.updateMeal(date, meal);
+    setState((current) => {
+      const logs = current.logs
+        .map((day) => ({
+          ...day,
+          meals: day.meals.filter((existing) => existing.id !== meal.id),
+        }))
+        .filter((day) => day.meals.length > 0);
+      const target = logs.find((day) => day.date === date);
+      if (target)
+        target.meals = [...target.meals, meal].sort((a, b) => a.time.localeCompare(b.time));
+      else logs.push({ date, meals: [meal] });
+      logs.sort((a, b) => (a.date < b.date ? 1 : -1));
+      return { ...current, logs };
+    });
+  }, []);
+
+  const deleteMeal = useCallback(async (mealId: string) => {
+    await api.deleteMeal(mealId);
+    setState((current) => ({
+      ...current,
+      logs: current.logs
+        .map((day) => ({
+          ...day,
+          meals: day.meals.filter((meal) => meal.id !== mealId),
+        }))
+        .filter((day) => day.meals.length > 0),
+    }));
+  }, []);
+
   const getDay = useCallback(
     (date: string) => state.logs.find((day) => day.date === date),
     [state.logs],
@@ -146,10 +179,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logout,
       setGoals,
       addMeal,
+      updateMeal,
+      deleteMeal,
       refresh,
       getDay,
     }),
-    [state, ready, busy, login, signup, logout, setGoals, addMeal, refresh, getDay],
+    [
+      state,
+      ready,
+      busy,
+      login,
+      signup,
+      logout,
+      setGoals,
+      addMeal,
+      updateMeal,
+      deleteMeal,
+      refresh,
+      getDay,
+    ],
   );
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;

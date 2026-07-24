@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import cornImage from "@/assets/corn.png";
 import { Mascot } from "@/components/Mascot";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,10 +79,35 @@ function AuthPage() {
             Snap meals, hit your macros, and get high-fives from your pocket coach. No spreadsheets.
             No guilt.
           </p>
-          <div className="mt-6 flex justify-center gap-2 text-sm">
-            <span className="rounded-full bg-white/70 px-3 py-1 font-semibold">🥑 Macro rings</span>
-            <span className="rounded-full bg-white/70 px-3 py-1 font-semibold">📸 Food scan</span>
-            <span className="rounded-full bg-white/70 px-3 py-1 font-semibold">🔥 Streaks</span>
+          <div className="mt-7 grid grid-cols-2 gap-2 text-left">
+            <div className="col-span-2 flex min-h-36 items-center justify-between overflow-hidden rounded-[1.75rem] bg-white/85 py-2 pl-5 pr-2 shadow-lg shadow-primary/10 ring-1 ring-black/5">
+              <div className="relative z-10 max-w-[190px]">
+                <div className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-primary">
+                  Smart food scan
+                </div>
+                <div className="mt-1 text-xl font-extrabold leading-tight">Snap. Review. Log.</div>
+                <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                  Take a photo and let NutriCoach identify what’s on your plate.
+                </p>
+              </div>
+              <div className="relative flex h-32 w-36 shrink-0 items-center justify-center">
+                <div
+                  aria-hidden="true"
+                  className="absolute h-24 w-24 rounded-full bg-sun/25 blur-xl"
+                />
+                <img
+                  src={cornImage}
+                  alt="Corn character taking a food photo"
+                  className="relative h-32 w-32 object-contain drop-shadow-lg"
+                />
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white/65 px-3 py-2.5 text-center text-sm font-semibold">
+              🥑 Macro rings
+            </div>
+            <div className="rounded-2xl bg-white/65 px-3 py-2.5 text-center text-sm font-semibold">
+              🔥 Streaks
+            </div>
           </div>
         </div>
       </div>

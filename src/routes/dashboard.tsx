@@ -2,10 +2,9 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo } from "react";
 import { AppLayout } from "@/components/AppLayout";
 import { MacroRing } from "@/components/MacroRing";
-import { Mascot } from "@/components/Mascot";
+import { CoachPanel } from "@/components/CoachPanel";
 import { Button } from "@/components/ui/button";
 import { sumMacros, todayIso, useApp } from "@/lib/store";
-import { randomCoach } from "@/lib/mock-foods";
 import { Flame, Beef, Wheat, Droplet, Plus } from "lucide-react";
 
 export const Route = createFileRoute("/dashboard")({
@@ -33,7 +32,6 @@ function Dashboard() {
   const today = todayIso();
   const day = logs.find((d) => d.date === today);
   const totals = useMemo(() => sumMacros(day?.meals ?? []), [day]);
-  const coach = useMemo(randomCoach, [totals.calories]);
 
   if (!goals) return null;
 
@@ -62,23 +60,7 @@ function Dashboard() {
           </Button>
         </header>
 
-        {/* Coach card */}
-        <div className="card-soft p-5 flex items-center gap-4 bg-gradient-to-r from-primary/10 via-sun/10 to-sky/10">
-          <Mascot size={72} className="animate-float shrink-0" />
-          <div className="min-w-0">
-            <div className="text-xs uppercase tracking-wider text-primary font-bold">
-              Coach says
-            </div>
-            <div className="font-bold text-lg truncate">{coach}</div>
-            <div className="text-sm text-muted-foreground">
-              {hitCount === 4
-                ? "🏆 Perfect macro day — you're a legend!"
-                : hitCount >= 2
-                  ? `Nice — ${hitCount}/4 macros on track. Keep going!`
-                  : "Fresh day, fresh choices. Let's get started."}
-            </div>
-          </div>
-        </div>
+        <CoachPanel />
 
         {/* Rings */}
         <div className="card-soft p-6">
