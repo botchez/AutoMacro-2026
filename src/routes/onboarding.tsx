@@ -134,8 +134,8 @@ function Onboarding() {
 
   return (
     <main className="min-h-screen p-4 md:p-8">
-      <div className="mx-auto grid min-h-[calc(100vh-2rem)] max-w-5xl overflow-hidden rounded-[2rem] border bg-white shadow-xl md:min-h-[680px] md:grid-cols-[280px_1fr]">
-        <aside className="bg-gradient-to-br from-primary/15 via-sun/15 to-sky/15 p-6 md:p-8">
+      <div className="mx-auto grid min-h-[calc(100vh-2rem)] max-w-5xl overflow-hidden rounded-[2rem] border bg-card shadow-xl transition-colors dark:shadow-black/40 md:min-h-[680px] md:grid-cols-[280px_1fr]">
+        <aside className="bg-gradient-to-br from-primary/15 via-sun/15 to-sky/15 p-6 transition-colors dark:from-emerald-950/65 dark:via-slate-900 dark:to-cyan-950/40 md:p-8">
           <div className="flex items-center gap-3">
             <Mascot size={58} className="animate-float" />
             <div>
@@ -150,13 +150,13 @@ function Onboarding() {
                 key={label}
                 className={cn(
                   "flex items-center gap-3 rounded-2xl p-2 transition-colors md:p-3",
-                  index === step && "bg-white shadow-sm",
+                  index === step && "bg-card shadow-sm dark:ring-1 dark:ring-white/5",
                   index < step && "text-primary",
                 )}
               >
                 <span
                   className={cn(
-                    "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white/70",
+                    "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-card/70",
                     index === step && "bg-primary text-primary-foreground",
                   )}
                 >

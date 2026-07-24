@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { CheckCircle2, FlaskConical, Loader2, Plus, Send, Sparkles, Utensils } from "lucide-react";
+import { Loader2, Plus, Send, Sparkles, Utensils } from "lucide-react";
 import coachHero from "@/assets/bicepsflex.png";
 import { api, type CoachMessage, type CoachRecommendation } from "@/lib/api";
 import { useApp } from "@/lib/store";
@@ -15,7 +15,6 @@ export function CoachPanel() {
   const [recommendations, setRecommendations] = useState<CoachRecommendation[]>([]);
   const [recommendationContext, setRecommendationContext] = useState("today’s macro gaps");
   const [loading, setLoading] = useState(true);
-  const [testStatus, setTestStatus] = useState<"idle" | "running" | "passed" | "failed">("idle");
   const threadRef = useRef<HTMLDivElement>(null);
   const { mealsLogged } = useApp();
 
@@ -64,10 +63,9 @@ export function CoachPanel() {
     if (thread) thread.scrollTop = thread.scrollHeight;
   }, [messages, loading]);
 
-  const ask = async (question = message, isTest = false) => {
+  const ask = async (question = message) => {
     const trimmed = question.trim();
     if (!trimmed || loading) return;
-    if (isTest) setTestStatus("running");
     setMessage("");
     setMessages((current) => [
       ...current,
@@ -89,7 +87,6 @@ export function CoachPanel() {
       // stored set unchanged in that case).
       if (Array.isArray(response.recommendations)) setRecommendations(response.recommendations);
       setRecommendationContext(trimmed);
-      if (isTest) setTestStatus("passed");
     } catch (error) {
       // Surface the real failure instead of a soothing non-answer — the coach fails
       // loud now, so show why (e.g. the 502 detail from the agent) for diagnosis.
@@ -104,18 +101,15 @@ export function CoachPanel() {
           createdAt: new Date().toISOString(),
         },
       ]);
-      if (isTest) setTestStatus("failed");
     } finally {
       setLoading(false);
     }
   };
 
-  // Runs the same coach check the "Test coach" button performs, but via the "auto"
-  // batch endpoint (coachTip) — it coaches the just-logged batch without injecting a
-  // fake user turn into the chat thread, and reflects on the button state.
+  // Run the automatic batch endpoint after a meal is logged. It coaches the
+  // just-logged batch without injecting a fake user turn into the chat thread.
   const runBatchCheck = async () => {
     if (loading) return;
-    setTestStatus("running");
     // Clear the thread immediately so the reset is visible even when the fresh tip
     // repeats the previous message's text; the server clears its copy too (below).
     setMessages([]);
@@ -131,9 +125,8 @@ export function CoachPanel() {
       // or clear it when the batch is on track and the coach suggested nothing.
       setRecommendations(Array.isArray(tip.recommendations) ? tip.recommendations : []);
       setRecommendationContext("your latest logged meal");
-      setTestStatus("passed");
     } catch {
-      setTestStatus("failed");
+      // The normal chat error state remains available if the user asks a question.
     } finally {
       setLoading(false);
     }
@@ -154,7 +147,7 @@ export function CoachPanel() {
   }, [mealsLogged]);
 
   return (
-    <section className="relative overflow-hidden rounded-[2rem] border border-primary/20 bg-gradient-to-br from-primary/15 via-white to-sun/15 dark:from-primary/20 dark:via-slate-900/95 dark:to-emerald-950/40 dark:border-slate-800 p-5 shadow-lg shadow-primary/5 dark:shadow-black/50 md:p-7 transition-colors">
+    <section className="relative overflow-hidden rounded-[2rem] border border-primary/20 bg-gradient-to-br from-primary/15 via-card to-sun/15 p-5 shadow-lg shadow-primary/5 transition-colors dark:border-emerald-900/35 dark:from-emerald-950/55 dark:via-slate-900/95 dark:to-cyan-950/30 dark:shadow-black/50 md:p-7">
       <div
         aria-hidden="true"
         className="absolute -right-16 -top-16 h-52 w-52 rounded-full bg-sky/20 dark:bg-emerald-500/10 blur-3xl pointer-events-none"
@@ -178,30 +171,6 @@ export function CoachPanel() {
                 Your conversation is saved and updates with every meal.
               </p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={loading}
-              onClick={() => void runBatchCheck()}
-              className="shrink-0 rounded-full bg-white dark:bg-slate-800/90 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-700 px-3 font-bold shadow-sm"
-            >
-              {testStatus === "running" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : testStatus === "passed" ? (
-                <CheckCircle2 className="mr-2 h-4 w-4 text-primary dark:text-emerald-400" />
-              ) : (
-                <FlaskConical className="mr-2 h-4 w-4" />
-              )}
-              <span className="hidden md:inline">
-                {testStatus === "passed"
-                  ? "Coach working"
-                  : testStatus === "failed"
-                    ? "Test again"
-                    : "Test coach"}
-              </span>
-              <span className="md:hidden">Test</span>
-            </Button>
           </div>
 
           <div
@@ -233,8 +202,8 @@ export function CoachPanel() {
             {loading && (
               <div className="flex justify-start">
                 <div className="flex items-center gap-2 rounded-2xl rounded-bl-md bg-muted dark:bg-slate-800/90 dark:border dark:border-slate-700/60 px-4 py-3 text-xs font-bold text-muted-foreground dark:text-slate-300">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary dark:text-emerald-400" /> Thinking about today’s
-                  log…
+                  <Loader2 className="h-4 w-4 animate-spin text-primary dark:text-emerald-400" />{" "}
+                  Thinking about today’s log…
                 </div>
               </div>
             )}
@@ -296,9 +265,14 @@ export function CoachPanel() {
           <div className="mt-4 space-y-2">
             {recommendations.length ? (
               recommendations.map((food) => (
-                <div key={food.name} className="rounded-xl border bg-background dark:bg-slate-800/60 dark:border-slate-700/60 p-3 transition-colors">
+                <div
+                  key={food.name}
+                  className="rounded-xl border bg-background dark:bg-slate-800/60 dark:border-slate-700/60 p-3 transition-colors"
+                >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="text-sm font-extrabold leading-tight text-foreground">{food.name}</div>
+                    <div className="text-sm font-extrabold leading-tight text-foreground">
+                      {food.name}
+                    </div>
                     <span className="shrink-0 rounded-full bg-primary/10 dark:bg-primary/20 px-2 py-0.5 text-[10px] font-bold text-primary dark:text-emerald-400">
                       {food.serving}
                     </span>

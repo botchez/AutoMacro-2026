@@ -149,9 +149,9 @@ function sourceMeta(source?: string | null): {
 }
 
 const SOURCE_TONE_CLASS: Record<ReturnType<typeof sourceMeta>["tone"], string> = {
-  db: "bg-green-100 text-green-700",
-  label: "bg-sky-100 text-sky-700",
-  estimate: "bg-amber-100 text-amber-700",
+  db: "bg-green-100 text-green-700 dark:bg-emerald-400/15 dark:text-emerald-300",
+  label: "bg-sky-100 text-sky-700 dark:bg-cyan-400/15 dark:text-cyan-300",
+  estimate: "bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300",
   manual: "bg-muted text-muted-foreground",
 };
 
@@ -178,9 +178,9 @@ const TOOL_LABEL: Record<string, string> = {
 };
 
 const TRACE_STATUS_CLASS: Record<string, string> = {
-  hit: "bg-green-100 text-green-700",
-  used: "bg-sky-100 text-sky-700",
-  miss: "bg-rose-100 text-rose-700",
+  hit: "bg-green-100 text-green-700 dark:bg-emerald-400/15 dark:text-emerald-300",
+  used: "bg-sky-100 text-sky-700 dark:bg-cyan-400/15 dark:text-cyan-300",
+  miss: "bg-rose-100 text-rose-700 dark:bg-rose-400/15 dark:text-rose-300",
 };
 
 // One tool call: which DB was queried, with what string, and what came back. This is the
@@ -188,7 +188,7 @@ const TRACE_STATUS_CLASS: Record<string, string> = {
 function TraceRow({ call }: { call: ToolCall }) {
   const per100 = call.per100 ?? null;
   return (
-    <div className="rounded-lg border bg-white/70 p-2">
+    <div className="rounded-lg border bg-card/70 p-2">
       <div className="flex flex-wrap items-center gap-1.5">
         <span
           className={cn(
@@ -216,7 +216,7 @@ function TraceRow({ call }: { call: ToolCall }) {
         {call.result ? (
           <span className="font-bold text-foreground">→ {call.result}</span>
         ) : (
-          <span className="font-bold text-rose-600">→ no match</span>
+          <span className="font-bold text-rose-600 dark:text-rose-300">→ no match</span>
         )}
         {call.fdcId != null && (
           <span className="ml-1 text-muted-foreground">(fdc {String(call.fdcId)})</span>
@@ -277,7 +277,7 @@ function DebugPanel({ debug, items }: { debug: VisionDebug | null; items: Detect
           </div>
         )}
         {debug?.reasoning && (
-          <details className="rounded-lg border bg-white/70 p-2">
+          <details className="rounded-lg border bg-card/70 p-2">
             <summary className="cursor-pointer font-bold">Model reasoning</summary>
             <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground">
               {debug.reasoning}
@@ -285,7 +285,7 @@ function DebugPanel({ debug, items }: { debug: VisionDebug | null; items: Detect
           </details>
         )}
         {debug?.modelRaw && (
-          <details className="rounded-lg border bg-white/70 p-2">
+          <details className="rounded-lg border bg-card/70 p-2">
             <summary className="cursor-pointer font-bold">Model raw response</summary>
             <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-muted-foreground">
               {debug.modelRaw}
@@ -1379,7 +1379,7 @@ function LogFood() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
-                      <Scale className="h-4 w-4 text-sky-600" /> Scale display
+                      <Scale className="h-4 w-4 text-sky-600 dark:text-sky-300" /> Scale display
                     </div>
                     <div className="mt-1 text-4xl font-black tabular-nums">
                       {displayedWeight}
@@ -1439,7 +1439,9 @@ function LogFood() {
                         <div
                           className={cn(
                             "flex items-center gap-2 text-xs font-extrabold",
-                            awaitingRemoval && !scanning ? "text-amber-700" : "text-primary",
+                            awaitingRemoval && !scanning
+                              ? "text-amber-700 dark:text-amber-300"
+                              : "text-primary",
                           )}
                         >
                           {scanning ? (
@@ -1563,7 +1565,7 @@ function LogFood() {
                       </span>
                     </div>
                     {pendingCapture.servingGrams == null && (
-                      <div className="mt-0.5 text-[11px] font-semibold text-amber-600">
+                      <div className="mt-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-300">
                         No serving size on the label — enter it below.
                       </div>
                     )}
@@ -1924,7 +1926,7 @@ function TimelineRow({
         {!last && <div className="absolute bottom-0 left-1/2 top-5 w-px bg-primary/20" />}
         <div
           className={cn(
-            "absolute left-1/2 top-5 h-3 w-3 -translate-x-1/2 rounded-full border-2 border-white shadow-sm",
+            "absolute left-1/2 top-5 h-3 w-3 -translate-x-1/2 rounded-full border-2 border-card shadow-sm",
             meals.length ? "bg-primary" : "bg-primary/25",
           )}
         />
@@ -2019,14 +2021,15 @@ function FoodRows({
               <SourceBadge source={item.source} />
             </div>
           </div>
-          <div className="relative">
+          <div className="relative shrink-0">
             <Input
               type="number"
+              inputMode="numeric"
               min={1}
               value={Math.round(item.grams)}
               onChange={(event) => onResize(item.id, Number(event.target.value))}
               aria-label={`${item.name} weight in grams`}
-              className="h-9 w-18 rounded-lg pr-6 text-right text-sm font-bold"
+              className="h-9 w-24 rounded-lg pl-3 pr-7 text-right text-sm font-bold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
             <span className="pointer-events-none absolute right-2 top-2.5 text-[10px] text-muted-foreground">
               g

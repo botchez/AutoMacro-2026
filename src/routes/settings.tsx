@@ -39,7 +39,8 @@ export const Route = createFileRoute("/settings")({
       { title: "Settings — NutriCoach" },
       {
         name: "description",
-        content: "Manage your profile, nutrition targets, preferences, theme, and account security.",
+        content:
+          "Manage your profile, nutrition targets, preferences, theme, and account security.",
       },
     ],
   }),
@@ -54,12 +55,15 @@ const sections = [
   { id: "security", label: "Security", icon: ShieldCheck },
 ] as const;
 
+type SectionId = (typeof sections)[number]["id"];
+
 function SettingsPage() {
-  const { user, goals, settings, theme, setTheme, ready, updateSettings, changePassword } = useApp();
+  const { user, goals, settings, theme, setTheme, ready, updateSettings, changePassword } =
+    useApp();
   const navigate = useNavigate();
   const [draft, setDraft] = useState<UserSettings | null>(null);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState("profile");
+  const [activeSection, setActiveSection] = useState<SectionId>("profile");
   const savedSettings = useMemo(
     () =>
       settings
@@ -106,6 +110,46 @@ function SettingsPage() {
     return () => window.removeEventListener("beforeunload", guard);
   }, [dirty]);
 
+  useEffect(() => {
+    let animationFrame: number | null = null;
+
+    const updateActiveSection = () => {
+      animationFrame = null;
+      const marker = window.innerHeight * 0.3;
+      let currentSection: SectionId = sections[0].id;
+
+      for (const section of sections) {
+        const element = document.getElementById(section.id);
+        if (!element) continue;
+        if (element.getBoundingClientRect().top <= marker) currentSection = section.id;
+        else break;
+      }
+
+      const pageBottom = window.scrollY + window.innerHeight;
+      const documentBottom = document.documentElement.scrollHeight;
+      if (pageBottom >= documentBottom - 8) {
+        currentSection = sections[sections.length - 1].id;
+      }
+
+      setActiveSection((active) => (active === currentSection ? active : currentSection));
+    };
+
+    const scheduleUpdate = () => {
+      if (animationFrame === null) {
+        animationFrame = window.requestAnimationFrame(updateActiveSection);
+      }
+    };
+
+    updateActiveSection();
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+    };
+  }, []);
+
   const save = async () => {
     if (!draft) return;
     if (!draft.name.trim()) {
@@ -139,7 +183,7 @@ function SettingsPage() {
     }
   };
 
-  const jumpTo = (id: string) => {
+  const jumpTo = (id: SectionId) => {
     setActiveSection(id);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -543,7 +587,7 @@ function SettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} className="card-soft scroll-mt-6 p-5 md:p-7">
+    <section id={id} className="card-soft scroll-mt-24 p-5 md:scroll-mt-6 md:p-7">
       <div className="mb-6 flex gap-3 border-b pb-5">
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
           <Icon className="h-5 w-5" />
@@ -929,7 +973,9 @@ function AppearanceSection({
                   </span>
                   <Icon className="h-4 w-4 opacity-80" />
                 </div>
-                <div className={cn("text-[11px] font-semibold p-2 rounded-lg truncate", chatBubble)}>
+                <div
+                  className={cn("text-[11px] font-semibold p-2 rounded-lg truncate", chatBubble)}
+                >
                   "What should I eat for dinner?"
                 </div>
               </div>

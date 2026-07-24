@@ -42,7 +42,7 @@ const CAROUSEL_ITEMS = [
     description: "Take a photo and let NutriCoach identify what’s on your plate.",
     image: cornImage,
     alt: "Corn character taking a food photo",
-    bgGlow: "bg-sun/30",
+    bgGlow: "bg-sun/30 dark:bg-amber-400/15",
   },
   {
     tag: "AI Nutrition Coach",
@@ -50,7 +50,7 @@ const CAROUSEL_ITEMS = [
     description: "Get real-time feedback, smart meal advice, and daily encouragement.",
     image: skinnyImage,
     alt: "Skinny fitness coach giving nutrition advice",
-    bgGlow: "bg-leaf/30",
+    bgGlow: "bg-leaf/30 dark:bg-emerald-400/15",
   },
   {
     tag: "Food History & Logs",
@@ -58,7 +58,7 @@ const CAROUSEL_ITEMS = [
     description: "Review your past meal logs, edit foods, and search historical entries.",
     image: bulkyImage,
     alt: "Bulky fitness coach representing nutrition progress",
-    bgGlow: "bg-sky/30",
+    bgGlow: "bg-sky/30 dark:bg-cyan-400/15",
   },
   {
     tag: "Precision Macro Goals",
@@ -67,7 +67,7 @@ const CAROUSEL_ITEMS = [
       "Calories, Protein, Carbs & Fat targets tailored specifically for your fitness journey.",
     image: buffImage,
     alt: "Buff fitness coach representing tailored macro goals",
-    bgGlow: "bg-mango/30",
+    bgGlow: "bg-mango/30 dark:bg-orange-400/15",
   },
 ];
 
@@ -81,8 +81,8 @@ function AuthPage() {
     }
   }, [ready, user, goals, navigate]);
 
-  const [loginEmail, setLoginEmail] = useState("demo@nutricoach.app");
-  const [loginPass, setLoginPass] = useState("demo1234");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPass, setLoginPass] = useState("");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
@@ -110,18 +110,9 @@ function AuthPage() {
     }
   };
 
-  const handleDemoLogin = async () => {
-    try {
-      await login("demo@nutricoach.app", "demo1234");
-      navigate({ to: "/dashboard" });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not open the demo");
-    }
-  };
-
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
-      <div className="hidden md:flex md:w-1/2 items-center justify-center p-10 bg-gradient-to-br from-primary/20 via-sun/20 to-sky/20">
+      <div className="hidden items-center justify-center bg-gradient-to-br from-primary/20 via-sun/20 to-sky/20 p-10 transition-colors dark:from-emerald-950/70 dark:via-slate-950 dark:to-cyan-950/50 md:flex md:w-1/2">
         <div className="max-w-md text-center">
           <Mascot size={180} className="mx-auto animate-float" />
           <h1 className="mt-6 text-4xl font-extrabold tracking-tight">
@@ -137,7 +128,7 @@ function AuthPage() {
         </div>
       </div>
 
-      <div className="flex-1 flex items-center justify-center p-6">
+      <div className="flex flex-1 items-center justify-center bg-background/35 p-6 transition-colors dark:bg-slate-950/20">
         <div className="w-full max-w-md card-soft p-6 md:p-8 animate-pop">
           <div className="flex md:hidden justify-center mb-4">
             <Mascot size={80} className="animate-float" />
@@ -193,18 +184,6 @@ function AuthPage() {
                   className="w-full rounded-full font-bold bounce-tap"
                 >
                   {busy ? "Signing in…" : "Let's go →"}
-                </Button>
-                <p className="text-xs text-center text-muted-foreground">
-                  Demo account is ready to use.
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => void handleDemoLogin()}
-                  className="w-full rounded-full font-bold"
-                >
-                  Explore with demo account
                 </Button>
               </form>
             </TabsContent>
@@ -335,7 +314,7 @@ function FeatureCarousel() {
       className="relative mt-7 px-8 outline-none"
     >
       {/* Floating Feature Card Container */}
-      <div className="animate-float overflow-hidden rounded-[1.75rem] bg-white/90 p-1 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.12)] backdrop-blur-md ring-1 ring-black/5 transition-all duration-300 hover:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.18)]">
+      <div className="animate-float overflow-hidden rounded-[1.75rem] bg-white/90 p-1 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-md transition-all duration-300 hover:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.18)] dark:bg-slate-900/90 dark:shadow-[0_24px_60px_-16px_rgba(0,0,0,0.72)] dark:ring-white/10 dark:hover:shadow-[0_30px_70px_-18px_rgba(16,185,129,0.18)]">
         <div
           aria-live="polite"
           className="flex transition-transform duration-500 ease-out"
@@ -344,7 +323,7 @@ function FeatureCarousel() {
           {CAROUSEL_ITEMS.map((item, i) => (
             <div
               key={i}
-              className="w-full shrink-0 flex min-h-36 items-center justify-between overflow-hidden rounded-[1.5rem] bg-gradient-to-br from-white via-white to-muted/20 py-3 pl-5 pr-2 text-left"
+              className="flex min-h-36 w-full shrink-0 items-center justify-between overflow-hidden rounded-[1.5rem] bg-gradient-to-br from-white via-white to-muted/20 py-3 pl-5 pr-2 text-left transition-colors dark:from-slate-900 dark:via-slate-900 dark:to-emerald-950/45"
             >
               <div className="relative z-10 max-w-[210px]">
                 <div className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-primary">
@@ -378,7 +357,7 @@ function FeatureCarousel() {
       <button
         onClick={prevSlide}
         aria-label="Previous slide"
-        className="absolute left-0 top-1/2 -translate-y-1/2 grid h-9 w-9 place-items-center rounded-full bg-white text-foreground shadow-xl hover:bg-primary hover:text-white bounce-tap z-30 border border-black/10 transition-all duration-200"
+        className="bounce-tap absolute left-0 top-1/2 z-30 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full border border-black/10 bg-white text-foreground shadow-xl transition-all duration-200 hover:bg-primary hover:text-white dark:border-white/10 dark:bg-slate-800 dark:shadow-black/40 dark:hover:bg-primary"
       >
         <ChevronLeft className="h-5 w-5" />
       </button>
@@ -386,7 +365,7 @@ function FeatureCarousel() {
       <button
         onClick={nextSlide}
         aria-label="Next slide"
-        className="absolute right-0 top-1/2 -translate-y-1/2 grid h-9 w-9 place-items-center rounded-full bg-white text-foreground shadow-xl hover:bg-primary hover:text-white bounce-tap z-30 border border-black/10 transition-all duration-200"
+        className="bounce-tap absolute right-0 top-1/2 z-30 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full border border-black/10 bg-white text-foreground shadow-xl transition-all duration-200 hover:bg-primary hover:text-white dark:border-white/10 dark:bg-slate-800 dark:shadow-black/40 dark:hover:bg-primary"
       >
         <ChevronRight className="h-5 w-5" />
       </button>
@@ -400,7 +379,9 @@ function FeatureCarousel() {
             aria-label={`Go to slide ${i + 1}`}
             className={cn(
               "h-2 rounded-full transition-all duration-300",
-              index === i ? "w-6 bg-primary" : "w-2 bg-black/15 hover:bg-black/30",
+              index === i
+                ? "w-6 bg-primary"
+                : "w-2 bg-black/15 hover:bg-black/30 dark:bg-white/20 dark:hover:bg-white/40",
             )}
           />
         ))}
@@ -408,7 +389,7 @@ function FeatureCarousel() {
           type="button"
           onClick={() => setIsPaused((current) => !current)}
           aria-label={isPaused ? "Resume feature carousel" : "Pause feature carousel"}
-          className="ml-2 grid h-7 w-7 place-items-center rounded-full border bg-white/80 text-muted-foreground transition-colors hover:text-primary"
+          className="ml-2 grid h-7 w-7 place-items-center rounded-full border bg-white/80 text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary dark:bg-slate-800/85"
         >
           {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
         </button>

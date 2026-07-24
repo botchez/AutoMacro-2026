@@ -311,7 +311,7 @@ function HistoryPage() {
             >
               <Search className="h-4 w-4 text-blue-500" />
               <span>Food History</span>
-              <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-600">
+              <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-600 dark:text-blue-300">
                 {flattenedFoodHistory.length}
               </span>
             </TabsTrigger>
@@ -760,10 +760,30 @@ function HistoryPage() {
                     className="h-full w-full appearance-none bg-transparent text-xs font-bold outline-none dark:text-slate-100"
                     aria-label="Sort food history"
                   >
-                    <option value="newest" className="bg-card dark:bg-slate-900 dark:text-slate-100">Newest first</option>
-                    <option value="oldest" className="bg-card dark:bg-slate-900 dark:text-slate-100">Oldest first</option>
-                    <option value="calories" className="bg-card dark:bg-slate-900 dark:text-slate-100">Highest calories</option>
-                    <option value="protein" className="bg-card dark:bg-slate-900 dark:text-slate-100">Highest protein</option>
+                    <option
+                      value="newest"
+                      className="bg-card dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      Newest first
+                    </option>
+                    <option
+                      value="oldest"
+                      className="bg-card dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      Oldest first
+                    </option>
+                    <option
+                      value="calories"
+                      className="bg-card dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      Highest calories
+                    </option>
+                    <option
+                      value="protein"
+                      className="bg-card dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      Highest protein
+                    </option>
                   </select>
                   <ChevronDown className="pointer-events-none h-3.5 w-3.5 text-muted-foreground" />
                 </label>
@@ -836,15 +856,15 @@ function HistoryPage() {
                             </div>
                             <div className="text-[11px] text-muted-foreground">
                               P:{" "}
-                              <span className="font-bold text-amber-600">
+                              <span className="font-bold text-amber-600 dark:text-amber-300">
                                 {round(item.food.protein)}g
                               </span>{" "}
                               | C:{" "}
-                              <span className="font-bold text-blue-600">
+                              <span className="font-bold text-blue-600 dark:text-blue-300">
                                 {round(item.food.carbs)}g
                               </span>{" "}
                               | F:{" "}
-                              <span className="font-bold text-rose-600">
+                              <span className="font-bold text-rose-600 dark:text-rose-300">
                                 {round(item.food.fat)}g
                               </span>
                             </div>
