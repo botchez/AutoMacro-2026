@@ -8,9 +8,13 @@ import {
   EyeOff,
   KeyRound,
   Loader2,
+  Monitor,
+  Moon,
   Save,
   ShieldCheck,
   SlidersHorizontal,
+  Sun,
+  SunMoon,
   UserRound,
   Utensils,
 } from "lucide-react";
@@ -26,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { useApp, type UserSettings } from "@/lib/store";
+import { useApp, type ThemeMode, type UserSettings } from "@/lib/store";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/settings")({
@@ -35,7 +39,7 @@ export const Route = createFileRoute("/settings")({
       { title: "Settings — NutriCoach" },
       {
         name: "description",
-        content: "Manage your profile, nutrition targets, preferences, and account security.",
+        content: "Manage your profile, nutrition targets, preferences, theme, and account security.",
       },
     ],
   }),
@@ -46,33 +50,36 @@ const sections = [
   { id: "profile", label: "Personal details", icon: UserRound },
   { id: "targets", label: "Nutrition targets", icon: SlidersHorizontal },
   { id: "preferences", label: "Preferences", icon: Utensils },
+  { id: "appearance", label: "Appearance", icon: SunMoon },
   { id: "security", label: "Security", icon: ShieldCheck },
 ] as const;
 
 function SettingsPage() {
-  const { user, goals, settings, ready, updateSettings, changePassword } = useApp();
+  const { user, goals, settings, theme, setTheme, ready, updateSettings, changePassword } = useApp();
   const navigate = useNavigate();
   const [draft, setDraft] = useState<UserSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [activeSection, setActiveSection] = useState("profile");
   const savedSettings = useMemo(
     () =>
-      settings ??
-      (user && goals
-        ? {
-            ...goals,
-            name: user.name,
-            email: user.email,
-            sex: "prefer-not" as const,
-            age: null,
-            height: null,
-            weight: null,
-            activity: "moderate" as const,
-            allergies: "",
-            weekStartsOn: "monday" as const,
-          }
-        : null),
-    [settings, user, goals],
+      settings
+        ? { ...settings, theme: settings.theme ?? theme }
+        : user && goals
+          ? {
+              ...goals,
+              name: user.name,
+              email: user.email,
+              sex: "prefer-not" as const,
+              age: null,
+              height: null,
+              weight: null,
+              activity: "moderate" as const,
+              allergies: "",
+              weekStartsOn: "monday" as const,
+              theme,
+            }
+          : null,
+    [settings, user, goals, theme],
   );
 
   useEffect(() => {
@@ -482,6 +489,8 @@ function SettingsPage() {
               </div>
             </SettingsSection>
 
+            <AppearanceSection draft={draft} setDraft={setDraft} setTheme={setTheme} />
+
             <PasswordSection changePassword={changePassword} />
           </div>
         </div>
@@ -838,4 +847,109 @@ function initials(name: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("");
+}
+
+function AppearanceSection({
+  draft,
+  setDraft,
+  setTheme,
+}: {
+  draft: UserSettings;
+  setDraft: React.Dispatch<React.SetStateAction<UserSettings | null>>;
+  setTheme: (theme: ThemeMode) => void;
+}) {
+  const currentTheme = draft.theme || "light";
+  return (
+    <SettingsSection
+      id="appearance"
+      icon={SunMoon}
+      title="Appearance & Theme"
+      description="Choose your preferred color theme. Dark mode provides a sleek dark background and vibrant high-contrast accents, especially for coach conversation."
+    >
+      <div className="grid gap-4 sm:grid-cols-3">
+        {[
+          {
+            value: "light" as const,
+            label: "Light Mode",
+            desc: "Bright & energetic UI",
+            icon: Sun,
+            previewBg: "bg-white border-slate-200 text-slate-900 shadow-sm",
+            badgeBg: "bg-emerald-600 text-white",
+            chatBubble: "bg-emerald-100/80 text-emerald-950",
+          },
+          {
+            value: "dark" as const,
+            label: "Dark Mode",
+            desc: "Deep Slate & Glowing accents",
+            icon: Moon,
+            previewBg: "bg-slate-950 border-slate-800 text-slate-100 shadow-sm",
+            badgeBg: "bg-emerald-500 text-slate-950 font-bold",
+            chatBubble: "bg-slate-800 text-slate-100 border border-slate-700",
+          },
+          {
+            value: "system" as const,
+            label: "System default",
+            desc: "Syncs with your device setting",
+            icon: Monitor,
+            previewBg: "bg-slate-900/60 border-slate-700 text-slate-100 shadow-sm",
+            badgeBg: "bg-primary text-primary-foreground",
+            chatBubble: "bg-slate-800/80 text-slate-200",
+          },
+        ].map(({ value, label, desc, icon: Icon, previewBg, badgeBg, chatBubble }) => {
+          const active = currentTheme === value;
+          return (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                setDraft((current) => current && { ...current, theme: value });
+                setTheme(value);
+              }}
+              className={cn(
+                "relative overflow-hidden rounded-2xl border-2 p-4 text-left transition-all bounce-tap",
+                active
+                  ? "border-primary bg-primary/8 shadow-md"
+                  : "border-border hover:border-primary/40",
+              )}
+            >
+              <div
+                className={cn(
+                  "mb-3.5 h-24 rounded-xl border p-3 flex flex-col justify-between transition-colors",
+                  previewBg,
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className={cn(
+                      "text-[9px] px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider",
+                      badgeBg,
+                    )}
+                  >
+                    Coach
+                  </span>
+                  <Icon className="h-4 w-4 opacity-80" />
+                </div>
+                <div className={cn("text-[11px] font-semibold p-2 rounded-lg truncate", chatBubble)}>
+                  "What should I eat for dinner?"
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-sm font-extrabold">
+                <span
+                  className={cn(
+                    "grid h-5 w-5 place-items-center rounded-full border",
+                    active && "border-primary bg-primary text-primary-foreground",
+                  )}
+                >
+                  {active && <Check className="h-3 w-3" />}
+                </span>
+                {label}
+              </div>
+              <div className="ml-7 mt-1 text-xs text-muted-foreground">{desc}</div>
+            </button>
+          );
+        })}
+      </div>
+    </SettingsSection>
+  );
 }

@@ -968,7 +968,7 @@ function LogFood() {
 
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
           <section className="card-soft overflow-hidden">
-            <div className="flex items-center justify-between border-b bg-white px-5 py-4">
+            <div className="flex items-center justify-between border-b bg-card px-5 py-4">
               <div>
                 <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
                   Daily timeline
@@ -1004,9 +1004,9 @@ function LogFood() {
           </section>
 
           <aside className="space-y-5 self-start xl:sticky xl:top-5">
-            <section className="rounded-2xl border bg-white p-5 shadow-sm">
+            <section className="rounded-2xl border bg-card p-5 shadow-sm">
               <div className="flex items-center gap-3">
-                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white text-primary shadow-sm">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-card text-primary shadow-sm">
                   <Clock3 className="h-5 w-5" />
                 </span>
                 <div className="min-w-0 flex-1">
@@ -1077,7 +1077,7 @@ function LogFood() {
                 </span>
               </div>
 
-              <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-foreground/95 p-5 text-white">
+              <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-slate-950 p-5 text-white">
                 {cameraOn ? (
                   <div className="relative z-10 flex w-full flex-col items-center">
                     <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-black">
@@ -1225,7 +1225,7 @@ function LogFood() {
                           onClick={() => fileInputRef.current?.click()}
                           disabled={scanning}
                           variant="outline"
-                          className="rounded-full font-bold text-foreground"
+                          className="rounded-full font-bold bg-slate-800 text-slate-100 border-slate-700 hover:bg-slate-700 hover:text-white"
                         >
                           <Upload className="mr-2 h-4 w-4" /> Upload image
                         </Button>
@@ -1294,7 +1294,7 @@ function LogFood() {
                         className={cn(
                           "flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5",
                           awaitingRemoval && !scanning
-                            ? "border-amber-400/50 bg-amber-50"
+                            ? "border-amber-400/50 bg-amber-50 dark:bg-amber-950/40"
                             : "border-primary/30 bg-primary/10",
                         )}
                       >
@@ -1417,7 +1417,7 @@ function LogFood() {
                   </div>
 
                   {/* Option 1 — log by serving size */}
-                  <div className="mt-3 rounded-xl border bg-white p-3">
+                  <div className="mt-3 rounded-xl border bg-card p-3">
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-extrabold">Log by serving size</div>
                       <span className="text-xs font-bold text-muted-foreground">
@@ -1461,7 +1461,7 @@ function LogFood() {
                   </div>
 
                   {/* Option 2 — weigh the food again */}
-                  <div className="mt-2 rounded-xl border bg-white p-3">
+                  <div className="mt-2 rounded-xl border bg-card p-3">
                     <div className="text-sm font-extrabold">Weigh the food</div>
                     {reweighing ? (
                       <div className="mt-2 flex items-center gap-2 text-xs font-bold text-primary">
@@ -1580,7 +1580,7 @@ function LogFood() {
                     {mealItems.length} item{mealItems.length === 1 ? "" : "s"} selected
                   </h3>
                 </div>
-                <span className="rounded-full bg-white px-3 py-1 text-xs font-extrabold shadow-sm">
+                <span className="rounded-full bg-card px-3 py-1 text-xs font-extrabold shadow-sm">
                   {Math.round(mealTotals.calories)} kcal
                 </span>
               </div>
@@ -1595,7 +1595,7 @@ function LogFood() {
                     }
                   />
                 ) : (
-                  <div className="flex h-full min-h-40 items-center justify-center rounded-2xl border border-dashed bg-white/60 p-5 text-center">
+                  <div className="flex h-full min-h-40 items-center justify-center rounded-2xl border border-dashed bg-card/60 p-5 text-center">
                     <div>
                       <Utensils className="mx-auto h-7 w-7 text-muted-foreground/40" />
                       <p className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -1672,7 +1672,7 @@ function WeekBar({
   weekStartsOn: "monday" | "sunday";
 }) {
   return (
-    <section className="relative rounded-2xl border bg-white p-2 shadow-sm">
+    <section className="relative rounded-2xl border bg-card p-2 shadow-sm">
       <div className="flex items-stretch gap-1">
         <Button
           type="button"
@@ -1788,7 +1788,7 @@ function TimelineRow({
         {meals.length ? (
           <div className="space-y-1.5">
             {meals.map((meal) => (
-              <div key={meal.id} className="overflow-hidden rounded-xl border bg-white">
+              <div key={meal.id} className="overflow-hidden rounded-xl border bg-card">
                 <div className="flex items-center justify-between border-b bg-primary/5 px-3 py-1.5">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-primary">
                     Meal at {formatTime(meal.time)}
