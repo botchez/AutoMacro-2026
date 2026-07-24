@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Aperture,
   Beef,
@@ -22,6 +22,7 @@ import {
   Utensils,
   Wheat,
   X,
+  Zap,
 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { Mascot } from "@/components/Mascot";
@@ -66,6 +67,33 @@ export const Route = createFileRoute("/log-food")({
 const uid = () => Math.random().toString(36).slice(2, 10);
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
+// Auto-capture tuning: a streamed reading counts as "settled" once it stays
+// within SETTLE_TOLERANCE_G for SETTLE_WINDOW_MS. Readings below MIN_CAPTURE_G
+// are treated as an empty/near-empty plate (noise, or an item being removed) and
+// never trigger a capture. SETTLE_RETAIN_MS is how much reading history we keep.
+const SETTLE_WINDOW_MS = 700;
+const SETTLE_TOLERANCE_G = 2;
+const MIN_CAPTURE_G = 5;
+const SETTLE_RETAIN_MS = 2000;
+const SETTLE_SAMPLE_MS = 80; // how often the auto loop samples the live weight
+const DEFAULT_SERVING_G = 30; // fallback serving size when the label/OFF has none
+
+// A detected food carries its per-100g density and (for packaged foods) a serving
+// size, so we can re-price it by serving or by a fresh weight after capture.
+type DetectedFood = FoodItem & {
+  confidence?: number;
+  per100?: Macros;
+  servingGrams?: number | null;
+};
+
+// A capture paused for the user to choose a portion. The trigger weight is only
+// used as the basis for scaling; the logged amount comes from the user's choice.
+type PendingCapture = {
+  items: DetectedFood[]; // detected foods, absolute macros at the trigger weight
+  triggerGrams: number; // capture trigger weight (sum of item grams)
+  servingGrams: number | null; // grams per serving from the label/OFF, if known
+};
+
 function LogFood() {
   const { user, goals, addMeal, updateMeal, deleteMeal, logs, ready } = useApp();
   const navigate = useNavigate();
@@ -84,11 +112,35 @@ function LogFood() {
   const [tareOffset, setTareOffset] = useState(0);
   const [capturedWeight, setCapturedWeight] = useState(0);
   const [scanning, setScanning] = useState(false);
+  // Hands-free "auto-capture" loop: tare -> wait for the weight to settle ->
+  // snapshot + analyze + add to the meal -> re-tare, ready for the next item.
+  const [autoActive, setAutoActive] = useState(false);
+  // True after a capture while we wait for the item to be lifted off the plate —
+  // drives the "remove the item" prompt. Mirrors rearmNeededRef, but as state so
+  // the UI re-renders (the ref alone doesn't).
+  const [awaitingRemoval, setAwaitingRemoval] = useState(false);
+  // A capture paused for a portion decision (log by serving vs re-weigh).
+  const [pendingCapture, setPendingCapture] = useState<PendingCapture | null>(null);
+  const [reweighing, setReweighing] = useState(false); // waiting for a fresh weight
+  const [servingSize, setServingSize] = useState(String(DEFAULT_SERVING_G));
+  const [servingCount, setServingCount] = useState("1");
+  const readingsRef = useRef<{ t: number; w: number }[]>([]); // rolling settle window
+  const autoBusyRef = useRef(false); // a capture->add->tare cycle is in flight
+  const rearmNeededRef = useRef(false); // wait for an empty plate before re-arming
+  const latestWeightRef = useRef<number | null>(null); // newest reading, for the poll loop
+  const pendingCaptureRef = useRef<PendingCapture | null>(null); // mirror, for the poll loop
+  const reweighingRef = useRef(false); // mirror, for the poll loop
   // Live webcam capture
   const [cameraOn, setCameraOn] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Guards a getUserMedia call that's in flight so we never open two streams for
+  // the same webcam (StrictMode double-mounts, or a fast double click) — opening
+  // twice and stopping one corrupts the survivor into a black feed.
+  const acquiringRef = useRef(false);
+  // Deferred camera teardown handle; see the auto-start effect below.
+  const teardownRef = useRef<number | null>(null);
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [mealItems, setMealItems] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
@@ -124,12 +176,20 @@ function LogFood() {
   };
 
   const startCamera = async () => {
+    // Already live (e.g. auto-started on mount) — just show it; opening a second
+    // stream for the same webcam corrupts the feed into a black frame.
+    if (streamRef.current) {
+      setCameraOn(true);
+      return;
+    }
+    if (acquiringRef.current) return; // a start is already in flight
     if (!navigator.mediaDevices?.getUserMedia) {
       toast.error("Camera not supported", {
         description: "Your browser can't access a webcam. Upload an image instead.",
       });
       return;
     }
+    acquiringRef.current = true;
     setCameraStarting(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -147,37 +207,59 @@ function LogFood() {
           : "Could not start the camera. Try uploading an image instead.";
       toast.error(message);
     } finally {
+      acquiringRef.current = false;
       setCameraStarting(false);
     }
   };
 
-  const capturePhoto = async () => {
+  // Grab the current webcam frame as a JPEG File, or null if the camera isn't
+  // ready. Shared by the manual "Capture photo" button and the auto-capture loop.
+  const snapshotFrame = async (): Promise<File | null> => {
     const video = videoRef.current;
-    if (!video || !video.videoWidth) {
-      toast.error("Camera isn't ready yet — give it a second.");
-      return;
-    }
+    if (!video || !video.videoWidth) return null;
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", 0.9),
     );
-    if (!blob) {
-      toast.error("Couldn't capture the frame. Try again.");
+    if (!blob) return null;
+    return new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
+  };
+
+  const capturePhoto = async () => {
+    const file = await snapshotFrame();
+    if (!file) {
+      toast.error("Camera isn't ready yet — give it a second.");
       return;
     }
-    const file = new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
-    stopCamera();
+    // Keep the camera streaming so the user can grab another angle without
+    // re-opening it — the feed stays live the whole session.
     await captureImage(file);
   };
 
-  // Attach the stream once the <video> element is mounted. Doing this in an effect
-  // (rather than right after getUserMedia) avoids a race where the element hasn't
-  // rendered yet, which shows a black frame.
+  // Bind the live stream the instant the <video> mounts. A *stable* callback ref
+  // fires the moment the element is committed to the DOM — so when the dialog
+  // opens and the <video> appears, the already-running stream attaches
+  // immediately, instead of waiting on an effect to catch up (the case that
+  // showed a black frame on first open). `useCallback([])` keeps it stable so
+  // React doesn't detach/reattach on every render.
+  const attachStream = useCallback((video: HTMLVideoElement | null) => {
+    videoRef.current = video;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+    if (video.srcObject !== stream) video.srcObject = stream;
+    const play = () => void video.play().catch(() => undefined);
+    if (video.readyState >= 2) play();
+    else video.onloadedmetadata = play;
+  }, []);
+
+  // Fallback attach for when the stream arrives *after* the <video> is already
+  // mounted (e.g. the manual "Open camera" button while the dialog is open) —
+  // the callback ref above won't re-fire for an element that's already there.
   useEffect(() => {
     const video = videoRef.current;
     const stream = streamRef.current;
@@ -189,10 +271,33 @@ function LogFood() {
     return () => {
       video.onloadedmetadata = null;
     };
-  }, [cameraOn]);
+    // `editorOpen` re-runs this when the dialog (which hosts the <video>) opens,
+    // re-binding the already-live stream to the freshly mounted element.
+  }, [cameraOn, editorOpen]);
 
-  // Release the camera when leaving the page.
-  useEffect(() => stopCamera, []);
+  // Start the camera automatically on arrival so the feed is live without a
+  // click, and release it when leaving the page.
+  //
+  // React StrictMode double-invokes this effect in dev (mount → cleanup →
+  // mount). The `acquiringRef` guard in startCamera means the second mount never
+  // opens a competing stream, and the teardown is deferred to a macrotask: the
+  // synchronous remount cancels it, so only a *real* unmount actually stops the
+  // camera. This avoids the black-feed race from acquiring twice.
+  useEffect(() => {
+    if (teardownRef.current !== null) {
+      clearTimeout(teardownRef.current);
+      teardownRef.current = null;
+    }
+    void startCamera();
+    return () => {
+      teardownRef.current = window.setTimeout(() => {
+        streamRef.current?.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        setCameraOn(false);
+        teardownRef.current = null;
+      }, 0);
+    };
+  }, []);
 
   const weekDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)),
@@ -236,7 +341,31 @@ function LogFood() {
     setEditorOpen(true);
   };
 
-  const openLogNow = () => {
+  // Tare the scale and arm the hands-free loop. Shared by "Log now" and the
+  // in-dialog "Start auto-capture" button.
+  const armAutoCapture = async () => {
+    readingsRef.current = [];
+    rearmNeededRef.current = false;
+    autoBusyRef.current = false;
+    setAwaitingRemoval(false);
+    setPendingCapture(null);
+    setReweighing(false);
+    setCapturedWeight(0);
+    await scale.tare();
+    setAutoActive(true);
+  };
+
+  const stopAutoCapture = () => {
+    setAutoActive(false);
+    readingsRef.current = [];
+    autoBusyRef.current = false;
+    rearmNeededRef.current = false;
+    setAwaitingRemoval(false);
+    setPendingCapture(null);
+    setReweighing(false);
+  };
+
+  const openLogNow = async () => {
     const now = new Date();
     const today = todayIso();
     setSelectedDate(today);
@@ -244,6 +373,16 @@ function LogFood() {
     setMealHour(now.getHours().toString().padStart(2, "0"));
     setMealMinute(now.getMinutes().toString().padStart(2, "0"));
     setEditorOpen(true);
+    if (scale.connected) {
+      await armAutoCapture();
+      toast.success("Scale tared — place your first item", {
+        description: "Auto-capture on: snap each item, then remove it to log the next.",
+      });
+    } else {
+      toast("Connect the scale for hands-free auto-capture", {
+        description: "Without a scale, capture photos manually below.",
+      });
+    }
   };
 
   const removeLoggedFood = async (meal: MealEntry, foodId: string) => {
@@ -293,6 +432,13 @@ function LogFood() {
     } else {
       setTareOffset(mockWeight);
     }
+    // Re-sync the auto-capture loop to the new zero: drop buffered readings and
+    // re-arm from this baseline. Without this, a manual tare mid-loop leaves the
+    // rearm/readings state pointing at the old baseline and captures stop firing.
+    // (Leave autoBusyRef alone so we never race an in-flight capture.)
+    readingsRef.current = [];
+    rearmNeededRef.current = false;
+    setAwaitingRemoval(false);
     toast.success("Scale tared to 0g");
   };
 
@@ -305,25 +451,236 @@ function LogFood() {
     toast.success("Weight captured", { description: `${liveWeight}g will guide detection.` });
   };
 
-  const captureImage = async (file: File) => {
+  // Run the food-vision cascade on a frame and return the detected foods (with
+  // fresh ids), or null on error. Shared by manual capture and the auto loop.
+  const analyzeImage = async (file: File, grams: number): Promise<DetectedFood[] | null> => {
     if (imagePreview) URL.revokeObjectURL(imagePreview);
     setImagePreview(URL.createObjectURL(file));
     setScanning(true);
     try {
-      const result = await api.analyze(file, capturedWeight || displayedWeight);
-      const items = result.items.map((item) => ({ ...item, id: uid() }));
-      setDetected(items);
+      const result = await api.analyze(file, grams);
       setVisionProvider(result.provider);
-      toast.success(`Found ${items.length} food${items.length === 1 ? "" : "s"}`, {
-        description: "Review portions before adding them to the meal.",
-      });
+      return result.items.map((item) => ({ ...item, id: uid() }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not analyze that image");
+      return null;
     } finally {
       setScanning(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
+
+  const captureImage = async (file: File) => {
+    const items = await analyzeImage(file, capturedWeight || displayedWeight);
+    if (!items) return;
+    setDetected(items);
+    toast.success(`Found ${items.length} food${items.length === 1 ? "" : "s"}`, {
+      description: "Review portions before adding them to the meal.",
+    });
+  };
+
+  // Scale a batch of detected foods (priced at `fromGrams` total) to a new total
+  // weight, preserving each food's share. Linear in grams, so this works for both
+  // "log by serving" and "weigh again".
+  const scaleDetected = (items: DetectedFood[], fromGrams: number, toGrams: number): FoodItem[] => {
+    const factor = fromGrams > 0 ? toGrams / fromGrams : 1;
+    return items.map((it) => ({
+      id: uid(),
+      name: it.name,
+      grams: Math.max(1, Math.round(it.grams * factor)),
+      calories: Math.round(it.calories * factor),
+      protein: round(it.protein * factor),
+      carbs: round(it.carbs * factor),
+      fat: round(it.fat * factor),
+      fdcId: it.fdcId,
+      source: it.source,
+    }));
+  };
+
+  // Commit a paused capture at `totalGrams`, then wait for the item to be lifted
+  // off before arming the next capture.
+  const commitPending = (pend: PendingCapture, totalGrams: number) => {
+    const scaled = scaleDetected(pend.items, pend.triggerGrams, totalGrams);
+    setMealItems((current) => [...current, ...scaled]);
+    toast.success(
+      `Added ${scaled.length} food${scaled.length === 1 ? "" : "s"} · ${Math.round(totalGrams)}g — remove it for the next`,
+    );
+    setPendingCapture(null);
+    setReweighing(false);
+    setCapturedWeight(0);
+    rearmNeededRef.current = true; // wait for the plate to be cleared before re-arming
+    readingsRef.current = [];
+    setAwaitingRemoval(true);
+  };
+
+  // "Log by serving size": price the capture at servingSize × servingCount.
+  const logByServing = () => {
+    if (!pendingCapture) return;
+    const sizeG = Math.max(1, parseFloat(servingSize) || 0);
+    const count = Math.max(0.1, parseFloat(servingCount) || 1);
+    commitPending(pendingCapture, sizeG * count);
+  };
+
+  // "Weigh the food again": keep the identity, zero the scale, and wait for a
+  // fresh settled weight (handled in the poll loop's re-weigh branch).
+  const weighAgain = async () => {
+    if (!pendingCapture) return;
+    readingsRef.current = [];
+    setReweighing(true);
+    await scale.tare();
+    toast("Place the food on the scale", {
+      description: "We'll log it automatically once the weight settles.",
+    });
+  };
+
+  // Discard a paused capture without logging; wait for removal before re-arming.
+  const cancelPending = () => {
+    setPendingCapture(null);
+    setReweighing(false);
+    rearmNeededRef.current = true;
+    readingsRef.current = [];
+    setAwaitingRemoval(true);
+  };
+
+  // One turn of the hands-free loop: snapshot the plate and analyze it. The
+  // settled weight is only the capture *trigger* — we pause on a pending decision
+  // (log by serving / weigh again) rather than logging the trigger weight.
+  const runAutoCapture = async (grams: number) => {
+    try {
+      const file = await snapshotFrame();
+      if (!file) {
+        toast.error("Camera isn't ready — remove the item and try again.");
+        rearmNeededRef.current = true;
+        readingsRef.current = [];
+        setAwaitingRemoval(true);
+        return;
+      }
+      const items = await analyzeImage(file, grams);
+      if (!items || !items.length) {
+        toast.error("No food detected — remove the item and try again.");
+        rearmNeededRef.current = true;
+        readingsRef.current = [];
+        setAwaitingRemoval(true);
+        return;
+      }
+      const triggerGrams = items.reduce((sum, it) => sum + it.grams, 0) || grams;
+      const servingGrams = items.find((it) => it.servingGrams != null)?.servingGrams ?? null;
+      setPendingCapture({ items, triggerGrams, servingGrams });
+      setServingSize(String(servingGrams ?? DEFAULT_SERVING_G));
+      setServingCount("1");
+      toast.success("Food identified — choose how to log it");
+    } finally {
+      autoBusyRef.current = false;
+    }
+  };
+
+  // Log a re-weighed capture at a freshly settled weight. Called from the poll loop.
+  const finalizeReweigh = (grams: number) => {
+    const pend = pendingCaptureRef.current;
+    if (!pend) {
+      setReweighing(false);
+      autoBusyRef.current = false;
+      return;
+    }
+    commitPending(pend, grams);
+    autoBusyRef.current = false;
+  };
+
+  // Keep live refs so the settle effect calls the latest closures without
+  // re-subscribing on every render.
+  const runAutoCaptureRef = useRef(runAutoCapture);
+  runAutoCaptureRef.current = runAutoCapture;
+  const finalizeReweighRef = useRef(finalizeReweigh);
+  finalizeReweighRef.current = finalizeReweigh;
+  // Mirror latest reading + loop state into refs so the polling loop reads current
+  // values even when React skips re-renders (identical state bails out).
+  latestWeightRef.current = scale.weight;
+  pendingCaptureRef.current = pendingCapture;
+  reweighingRef.current = reweighing;
+
+  // Settle detection: watch the streamed weight and fire one auto-capture once a
+  // reading has held steady for a full window.
+  //
+  // We *poll* on a fixed cadence rather than reacting to weight changes: the hook
+  // calls setWeight() every reading, but React bails on identical values, so the
+  // instant a reading stabilizes it stops emitting — an event-driven check would
+  // never see "settled" and capture would only fire on random jitter (the "takes
+  // way longer than the window" bug). Sampling on a timer makes it deterministic:
+  // a steady plate captures ~SETTLE_WINDOW_MS after it stops changing.
+  useEffect(() => {
+    if (!autoActive || !scale.connected) {
+      readingsRef.current = [];
+      return;
+    }
+    const tick = () => {
+      const w = latestWeightRef.current;
+      if (w == null) return;
+      const now = Date.now();
+      const buf = readingsRef.current;
+      buf.push({ t: now, w });
+      while (buf.length > 1 && now - buf[0].t > SETTLE_RETAIN_MS) buf.shift();
+
+      if (autoBusyRef.current) return; // a capture cycle is already running
+
+      // Is the reading loaded (>= MIN) and steady across the whole window?
+      let settled = false;
+      if (w >= MIN_CAPTURE_G) {
+        const windowStart = now - SETTLE_WINDOW_MS;
+        if (buf[0].t <= windowStart) {
+          // full window of history
+          let min = Infinity;
+          let max = -Infinity;
+          for (const r of buf) {
+            if (r.t < windowStart) continue;
+            if (r.w < min) min = r.w;
+            if (r.w > max) max = r.w;
+          }
+          settled = max - min <= SETTLE_TOLERANCE_G;
+        }
+      }
+
+      // Re-weigh mode: the food is already identified; log it at the fresh weight.
+      if (reweighingRef.current) {
+        if (settled) {
+          autoBusyRef.current = true;
+          finalizeReweighRef.current(w);
+        }
+        return;
+      }
+
+      // Paused on a portion decision — don't trigger anything until the user picks.
+      if (pendingCaptureRef.current) return;
+
+      // After a capture, wait for the item to be removed (plate reads empty)
+      // before arming again, then re-zero on the empty plate so any drift is
+      // cancelled before the next item.
+      if (rearmNeededRef.current) {
+        if (w < MIN_CAPTURE_G) {
+          rearmNeededRef.current = false;
+          setAwaitingRemoval(false);
+          void scale.tare();
+        }
+        return;
+      }
+
+      if (settled) {
+        autoBusyRef.current = true; // claim the cycle before the async work starts
+        void runAutoCaptureRef.current(w);
+      }
+    };
+    const id = window.setInterval(tick, SETTLE_SAMPLE_MS);
+    return () => window.clearInterval(id);
+  }, [autoActive, scale.connected]);
+
+  // Auto mode only makes sense with a live scale and an open editor; drop out of
+  // it if the scale disconnects or the dialog closes.
+  useEffect(() => {
+    if (autoActive && (!scale.connected || !editorOpen)) {
+      setAutoActive(false);
+      setPendingCapture(null);
+      setReweighing(false);
+    }
+  }, [autoActive, scale.connected, editorOpen]);
 
   const addReferenceFood = (food: (typeof MOCK_FOOD_DB)[number]) => {
     const grams = capturedWeight > 0 ? capturedWeight : 100;
@@ -387,6 +744,17 @@ function LogFood() {
       setSaving(false);
     }
   };
+
+  // Live preview for the "log by serving" choice.
+  const servingTotalG =
+    Math.max(1, parseFloat(servingSize) || 0) * Math.max(0.1, parseFloat(servingCount) || 1);
+  const servingPreviewCals =
+    pendingCapture && pendingCapture.triggerGrams > 0
+      ? Math.round(
+          pendingCapture.items.reduce((sum, it) => sum + it.calories, 0) *
+            (servingTotalG / pendingCapture.triggerGrams),
+        )
+      : 0;
 
   if (!goals) return null;
 
@@ -478,7 +846,10 @@ function LogFood() {
               <p className="mt-3 text-xs leading-5 text-muted-foreground">
                 Open the food scanner using today’s date and the current hour and minute.
               </p>
-              <Button onClick={openLogNow} className="mt-4 w-full rounded-xl font-extrabold">
+              <Button
+                onClick={() => void openLogNow()}
+                className="mt-4 w-full rounded-xl font-extrabold"
+              >
                 <Plus className="mr-2 h-4 w-4" /> Log now
               </Button>
             </section>
@@ -528,27 +899,84 @@ function LogFood() {
                     <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-black">
                       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <video
-                        ref={videoRef}
+                        ref={attachStream}
                         autoPlay
                         playsInline
                         muted
                         className="max-h-[300px] w-full object-contain"
                       />
+                      {scanning && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/70 backdrop-blur-sm">
+                          <Loader2 className="h-10 w-10 animate-spin text-sun" />
+                          <div className="text-center">
+                            <div className="font-extrabold">Identifying your food…</div>
+                            <div className="mt-0.5 text-xs text-white/70">
+                              Analyzing the plate — this can take a few seconds.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {awaitingRemoval && !scanning && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/65 backdrop-blur-sm">
+                          <span className="grid h-12 w-12 place-items-center rounded-full bg-green-500/20">
+                            <Check className="h-7 w-7 text-green-400" />
+                          </span>
+                          <div className="text-center">
+                            <div className="font-extrabold">Logged — remove the item</div>
+                            <div className="mt-0.5 text-xs text-white/70">
+                              Lift it off the scale; the next item arms automatically.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {pendingCapture && !scanning && !reweighing && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/65 backdrop-blur-sm">
+                          <span className="grid h-12 w-12 place-items-center rounded-full bg-primary/25">
+                            <Check className="h-7 w-7 text-primary" />
+                          </span>
+                          <div className="text-center">
+                            <div className="font-extrabold">Food identified</div>
+                            <div className="mt-0.5 text-xs text-white/70">
+                              Choose a portion on the right — by serving or weigh it.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {reweighing && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/65 backdrop-blur-sm">
+                          <Scale className="h-9 w-9 text-sun" />
+                          <div className="text-center">
+                            <div className="font-extrabold">Weigh the food</div>
+                            <div className="mt-0.5 text-xs text-white/70">
+                              Place it on the scale — logs once the weight settles.
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={stopCamera}
                         aria-label="Close camera"
-                        className="absolute right-2 top-2 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
+                        className="absolute right-2 top-2 z-30 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
                       >
                         <X className="h-4 w-4" />
                       </button>
                     </div>
                     <Button
                       onClick={() => void capturePhoto()}
+                      disabled={scanning}
                       variant="secondary"
                       className="mt-4 rounded-full font-bold"
                     >
-                      <Aperture className="mr-2 h-4 w-4" /> Capture photo
+                      {scanning ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing…
+                        </>
+                      ) : (
+                        <>
+                          <Aperture className="mr-2 h-4 w-4" /> Capture photo
+                        </>
+                      )}
                     </Button>
                   </div>
                 ) : (
@@ -672,6 +1100,82 @@ function LogFood() {
                 <Button onClick={captureWeight} className="mt-3 w-full rounded-xl font-bold">
                   <Scale className="mr-2 h-4 w-4" /> Capture weight
                 </Button>
+                {scale.connected && (
+                  <div className="mt-3">
+                    {autoActive ? (
+                      <div
+                        className={cn(
+                          "flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5",
+                          awaitingRemoval && !scanning
+                            ? "border-amber-400/50 bg-amber-50"
+                            : "border-primary/30 bg-primary/10",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "flex items-center gap-2 text-xs font-extrabold",
+                            awaitingRemoval && !scanning ? "text-amber-700" : "text-primary",
+                          )}
+                        >
+                          {scanning ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Identifying food…
+                            </>
+                          ) : reweighing ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              Weighing — waiting for it to settle…
+                            </>
+                          ) : pendingCapture ? (
+                            <>
+                              <span className="relative flex h-2.5 w-2.5">
+                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+                                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+                              </span>
+                              Choose a portion below
+                            </>
+                          ) : awaitingRemoval ? (
+                            <>
+                              <Check className="h-3.5 w-3.5" />
+                              Logged · remove the item to continue
+                            </>
+                          ) : (
+                            <>
+                              <span className="relative flex h-2.5 w-2.5">
+                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+                                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+                              </span>
+                              Auto-capturing · place an item
+                            </>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={stopAutoCapture}
+                          disabled={scanning}
+                          className="h-7 rounded-lg px-2 text-xs"
+                        >
+                          Stop
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={() => {
+                          void armAutoCapture();
+                          toast.success("Scale tared — place your first item", {
+                            description: "Auto-capture on: each settled item is snapped and added.",
+                          });
+                        }}
+                        variant="outline"
+                        className="w-full rounded-xl font-bold"
+                      >
+                        <Zap className="mr-2 h-4 w-4" /> Start auto-capture
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {scale.supported &&
                   (scale.connected ? (
                     <Button
@@ -693,6 +1197,101 @@ function LogFood() {
                     </Button>
                   ))}
               </section>
+
+              {pendingCapture && (
+                <section className="rounded-2xl border-2 border-primary/40 bg-primary/5 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
+                        Identified · choose a portion
+                      </div>
+                      <h3 className="mt-0.5 truncate text-lg font-black">
+                        {pendingCapture.items.map((it) => it.name).join(", ")}
+                      </h3>
+                      <div className="text-xs text-muted-foreground">
+                        {pendingCapture.items[0]?.source ?? "detected"} · captured at{" "}
+                        {Math.round(pendingCapture.triggerGrams)}g
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={cancelPending}
+                      aria-label="Discard capture"
+                      className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {/* Option 1 — log by serving size */}
+                  <div className="mt-3 rounded-xl border bg-white p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-extrabold">Log by serving size</div>
+                      <span className="text-xs font-bold text-muted-foreground">
+                        {Math.round(servingTotalG)}g · {servingPreviewCals} kcal
+                      </span>
+                    </div>
+                    {pendingCapture.servingGrams == null && (
+                      <div className="mt-0.5 text-[11px] font-semibold text-amber-600">
+                        No serving size on the label — enter it below.
+                      </div>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-bold">
+                      <div className="flex items-center gap-1 rounded-lg border bg-muted/30 px-2">
+                        <Input
+                          type="number"
+                          min={1}
+                          value={servingSize}
+                          onChange={(event) => setServingSize(event.target.value)}
+                          aria-label="Serving size in grams"
+                          className="h-9 w-16 border-0 bg-transparent p-1 text-center font-bold shadow-none"
+                        />
+                        <span className="text-muted-foreground">g</span>
+                      </div>
+                      <span className="text-muted-foreground">×</span>
+                      <div className="flex items-center gap-1 rounded-lg border bg-muted/30 px-2">
+                        <Input
+                          type="number"
+                          min={0}
+                          step="0.5"
+                          value={servingCount}
+                          onChange={(event) => setServingCount(event.target.value)}
+                          aria-label="Number of servings"
+                          className="h-9 w-14 border-0 bg-transparent p-1 text-center font-bold shadow-none"
+                        />
+                        <span className="text-muted-foreground">serv</span>
+                      </div>
+                    </div>
+                    <Button onClick={logByServing} className="mt-2 w-full rounded-xl font-bold">
+                      <Check className="mr-2 h-4 w-4" /> Log this serving
+                    </Button>
+                  </div>
+
+                  {/* Option 2 — weigh the food again */}
+                  <div className="mt-2 rounded-xl border bg-white p-3">
+                    <div className="text-sm font-extrabold">Weigh the food</div>
+                    {reweighing ? (
+                      <div className="mt-2 flex items-center gap-2 text-xs font-bold text-primary">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Place it on the scale — logging once the weight settles…
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">
+                          Zero the scale and weigh the actual portion (e.g. cereal poured out).
+                        </div>
+                        <Button
+                          onClick={() => void weighAgain()}
+                          variant="outline"
+                          className="mt-2 w-full rounded-xl font-bold"
+                        >
+                          <Scale className="mr-2 h-4 w-4" /> Weigh it now
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </section>
+              )}
 
               {detected.length > 0 && (
                 <section className="rounded-2xl border p-4">

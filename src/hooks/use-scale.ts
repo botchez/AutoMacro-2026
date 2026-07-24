@@ -109,28 +109,42 @@ export function useScale(): ScaleState {
     setWeight(null);
   }, []);
 
+  // Open an already-obtained port and start streaming. Shared by the user-gesture
+  // `connect()` path and the silent auto-reconnect on mount.
+  const openPort = useCallback(
+    async (port: SerialPort) => {
+      try {
+        await port.open({ baudRate: 115200 });
+        portRef.current = port;
+
+        if (port.writable) {
+          writerRef.current = port.writable.getWriter();
+        }
+
+        keepReadingRef.current = true;
+        setConnected(true);
+        readLoopRef.current = readLoop(port);
+        return true;
+      } catch {
+        // Open failed (e.g. already in use) — leave everything closed.
+        await disconnect();
+        return false;
+      }
+    },
+    [readLoop, disconnect],
+  );
+
   const connect = useCallback(async () => {
     if (!navigator.serial) return false;
     try {
       // requestPort must run inside the click handler (user gesture).
       const port = await navigator.serial.requestPort();
-      await port.open({ baudRate: 115200 });
-      portRef.current = port;
-
-      if (port.writable) {
-        writerRef.current = port.writable.getWriter();
-      }
-
-      keepReadingRef.current = true;
-      setConnected(true);
-      readLoopRef.current = readLoop(port);
-      return true;
+      return await openPort(port);
     } catch {
-      // Port selection cancelled or open failed — leave everything closed.
-      await disconnect();
+      // Port selection cancelled — nothing to clean up.
       return false;
     }
-  }, [readLoop, disconnect]);
+  }, [openPort]);
 
   const tare = useCallback(async () => {
     const writer = writerRef.current;
@@ -141,6 +155,34 @@ export function useScale(): ScaleState {
       // ignore
     }
   }, []);
+
+  // On mount, silently reconnect to a scale the user has already authorized.
+  // getPorts() needs no user gesture, so this works on page load; the first-ever
+  // pairing still goes through connect()/requestPort() from a click. Plugging the
+  // device in later fires the "connect" event, which reconnects it too.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.serial) return;
+    const serial = navigator.serial;
+    let cancelled = false;
+
+    const reconnect = async () => {
+      try {
+        const ports = await serial.getPorts();
+        if (!cancelled && ports.length > 0 && !portRef.current) {
+          await openPort(ports[0]);
+        }
+      } catch {
+        // No authorized ports or reconnect failed — wait for a manual connect.
+      }
+    };
+
+    void reconnect();
+    serial.addEventListener("connect", reconnect);
+    return () => {
+      cancelled = true;
+      serial.removeEventListener("connect", reconnect);
+    };
+  }, [openPort]);
 
   // Release the port when the consuming component unmounts.
   useEffect(() => {

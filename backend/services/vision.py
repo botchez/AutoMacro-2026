@@ -129,6 +129,8 @@ class VisionCascade:
         items: list[dict] = []
         for component in result.result.get("components", []):
             macros = component.get("macros") or {}
+            per_100g = component.get("per_100g") or {}
+            serving_grams = component.get("serving_grams")
             source_tag = component.get("macro_source", "estimate")
             fdc_id = component.get("fdc_id")
             # For barcode/OFF components there's no fdcId but there may be a barcode we
@@ -148,6 +150,19 @@ class VisionCascade:
                     "confidence": max(0.0, min(1.0, float(confidence))),
                     "fdcId": reference,
                     "source": _SOURCE_LABEL.get(source_tag, source_tag),
+                    # Portion helpers for the "log by serving / re-weigh" flow: the
+                    # food's per-100g density and grams-per-serving when known (OFF).
+                    "per100": {
+                        "calories": round(per_100g.get("kcal") or 0.0),
+                        "protein": round(per_100g.get("protein") or 0.0, 1),
+                        "carbs": round(per_100g.get("carbs") or 0.0, 1),
+                        "fat": round(per_100g.get("fat") or 0.0, 1),
+                    },
+                    "servingGrams": (
+                        round(float(serving_grams), 1)
+                        if serving_grams is not None
+                        else None
+                    ),
                 }
             )
         return items, result.model

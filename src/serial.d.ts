@@ -11,6 +11,10 @@ interface SerialPort {
 
 interface Serial {
   requestPort(): Promise<SerialPort>;
+  /** Ports the user has already authorized — returned without a user gesture. */
+  getPorts(): Promise<SerialPort[]>;
+  addEventListener(type: "connect" | "disconnect", listener: (event: Event) => void): void;
+  removeEventListener(type: "connect" | "disconnect", listener: (event: Event) => void): void;
 }
 
 interface Navigator {

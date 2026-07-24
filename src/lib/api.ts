@@ -9,8 +9,15 @@ type AppState = {
 };
 
 type AuthResponse = { token: string; user: Exclude<User, null> };
+export type DetectedItem = Omit<FoodItem, "id"> & {
+  confidence: number;
+  /** Per-100g macro density, for re-weighing / serving math. */
+  per100?: { calories: number; protein: number; carbs: number; fat: number };
+  /** Grams per serving when known (Open Food Facts), else null. */
+  servingGrams?: number | null;
+};
 export type VisionResponse = {
-  items: Array<Omit<FoodItem, "id"> & { confidence: number }>;
+  items: DetectedItem[];
   provider: string;
   cached: boolean;
 };

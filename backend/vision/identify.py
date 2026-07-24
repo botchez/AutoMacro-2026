@@ -27,6 +27,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -200,11 +201,34 @@ def _off_macros(n: dict) -> dict:
     }
 
 
+def _off_serving_grams(p: dict) -> float | None:
+    """Grams per serving from an OFF product, or None. Prefers the numeric
+    `serving_quantity`; otherwise parses a gram figure out of `serving_size`
+    (e.g. "30 g", "3/4 cup (30 g)")."""
+    p = p or {}
+    q = p.get("serving_quantity")
+    try:
+        if q is not None and float(q) > 0:
+            return round(float(q), 1)
+    except (TypeError, ValueError):
+        pass
+    size = p.get("serving_size")
+    if isinstance(size, str):
+        m = re.search(r"([\d.]+)\s*g\b", size)
+        if m:
+            try:
+                grams = float(m.group(1))
+                return round(grams, 1) if grams > 0 else None
+            except ValueError:
+                return None
+    return None
+
+
 def _off_lookup(barcode: str) -> dict | None:
     """Best-effort Open Food Facts barcode lookup -> uniform per-100g, or None."""
     url = (
         "https://world.openfoodfacts.org/api/v2/product/"
-        f"{barcode}.json?fields=product_name,nutriments"
+        f"{barcode}.json?fields=product_name,nutriments,serving_size,serving_quantity"
     )
     req = urllib.request.Request(url, headers={"User-Agent": OFF_USER_AGENT})
     try:
@@ -218,6 +242,7 @@ def _off_lookup(barcode: str) -> dict | None:
     return {
         "food_name": p.get("product_name") or f"barcode {barcode}",
         "macros_per_100g": _off_macros(p.get("nutriments", {})),
+        "serving_grams": _off_serving_grams(p),
         "barcode": barcode,
     }
 
@@ -235,7 +260,7 @@ def _off_search(query: str) -> dict | None:
         "json": 1,
         "page_size": 5,
         "sort_by": "popularity_key",  # most-scanned first -> the likeliest product
-        "fields": "code,product_name,brands,nutriments",
+        "fields": "code,product_name,brands,nutriments,serving_size,serving_quantity",
     })
     req = urllib.request.Request(f"{OFF_SEARCH_URL}?{params}",
                                 headers={"User-Agent": OFF_USER_AGENT})
@@ -261,6 +286,7 @@ def _off_search(query: str) -> dict | None:
         return {
             "food_name": (p.get("product_name") or "").strip() or query,
             "macros_per_100g": macros,
+            "serving_grams": _off_serving_grams(p),
             "barcode": p.get("code"),
         }
     return None
@@ -455,6 +481,8 @@ def _resolve_component(raw: dict, note) -> dict:
             comp["per_100g"] = _coerce_per_100g(hit["macros_per_100g"])
             comp["macro_source"] = "off"
             comp["off_match"] = hit["food_name"]
+            if hit.get("serving_grams") is not None:
+                comp["serving_grams"] = hit["serving_grams"]
             if hit.get("barcode"):
                 comp["barcode"] = hit["barcode"]
             note(f"{name!r} -> Open Food Facts: {hit['food_name']}")
@@ -561,6 +589,8 @@ def identify(image_bytes: bytes, grams: float | None = None,
             comp = {"name": off["food_name"], "fraction": 1.0,
                     "per_100g": _coerce_per_100g(off["macros_per_100g"]),
                     "macro_source": "barcode", "barcode": barcode}
+            if off.get("serving_grams") is not None:
+                comp["serving_grams"] = off["serving_grams"]
             result = _build_result(off["food_name"], [comp], grams, events)
             return IdentifyResult(result, events, "barcode/off")
         note("barcode found but no Open Food Facts match; routing to the model")
