@@ -5,9 +5,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from .config import settings
 from .db import connect, initialize_database, transaction, utc_now
@@ -19,6 +20,10 @@ from .models import (
     CoachOut,
     GoalsIn,
     MealIn,
+    PasswordChangeIn,
+    SettingsIn,
+    SettingsOut,
+    SettingsUpdateOut,
     SignupIn,
     UserOut,
     VisionOut,
@@ -29,7 +34,7 @@ from .security import (
     token_digest,
     verify_password,
 )
-from .services.coach import CoachService
+from .services.coach import CoachService, CoachUnavailableError
 from .services.vision import VisionCascade
 
 
@@ -46,6 +51,13 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(CoachUnavailableError)
+async def _coach_unavailable_handler(_: Request, exc: CoachUnavailableError) -> JSONResponse:
+    # Fail loud: the coach couldn't reach/parse the agent. 502 + the real reason so it's
+    # obvious in the UI and logs rather than masked by a canned reply.
+    return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={"detail": str(exc)})
 
 
 def db_connection():
@@ -78,6 +90,29 @@ def current_user(
 
 def user_out(row: sqlite3.Row) -> UserOut:
     return UserOut(id=row["id"], name=row["name"], email=row["email"])
+
+
+def settings_out(
+    user: sqlite3.Row, goals: sqlite3.Row, preferences: sqlite3.Row | None
+) -> SettingsOut:
+    return SettingsOut(
+        name=user["name"],
+        email=user["email"],
+        goalType=goals["goal_type"],
+        calories=goals["calories"],
+        protein=goals["protein"],
+        carbs=goals["carbs"],
+        fat=goals["fat"],
+        dietary=goals["dietary"],
+        units=goals["units"],
+        sex=preferences["sex"] if preferences else "prefer-not",
+        age=preferences["age"] if preferences else None,
+        height=preferences["height"] if preferences else None,
+        weight=preferences["weight"] if preferences else None,
+        activity=preferences["activity"] if preferences else "moderate",
+        allergies=preferences["allergies"] if preferences else "",
+        weekStartsOn=preferences["week_starts_on"] if preferences else "monday",
+    )
 
 
 def create_session(connection: sqlite3.Connection, user_id: str) -> str:
@@ -156,6 +191,9 @@ def state(
     goals = connection.execute(
         "SELECT * FROM goals WHERE user_id = ?", (user["id"],)
     ).fetchone()
+    preferences = connection.execute(
+        "SELECT * FROM user_settings WHERE user_id = ?", (user["id"],)
+    ).fetchone()
     meals = connection.execute(
         """
         SELECT * FROM meals WHERE user_id = ?
@@ -206,6 +244,11 @@ def state(
     return {
         "user": user_out(user).model_dump(),
         "goals": goals_payload,
+        "settings": (
+            settings_out(user, goals, preferences).model_dump(by_alias=True)
+            if goals
+            else None
+        ),
         "logs": list(logs_by_date.values()),
     }
 
@@ -245,6 +288,112 @@ def put_goals(
             ),
         )
     return payload.model_dump(by_alias=True)
+
+
+@app.put("/api/settings", response_model=SettingsUpdateOut)
+def put_settings(
+    payload: SettingsIn,
+    user: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    try:
+        with connection:
+            connection.execute(
+                "UPDATE users SET name = ?, email = ? WHERE id = ?",
+                (payload.name.strip(), str(payload.email).lower(), user["id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO goals
+                (user_id, goal_type, calories, protein, carbs, fat, dietary, units, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  goal_type = excluded.goal_type,
+                  calories = excluded.calories,
+                  protein = excluded.protein,
+                  carbs = excluded.carbs,
+                  fat = excluded.fat,
+                  dietary = excluded.dietary,
+                  units = excluded.units,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    user["id"],
+                    payload.goalType,
+                    payload.calories,
+                    payload.protein,
+                    payload.carbs,
+                    payload.fat,
+                    payload.dietary.strip(),
+                    payload.units,
+                    utc_now(),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO user_settings
+                (user_id, sex, age, height, weight, activity, allergies,
+                 week_starts_on, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                  sex = excluded.sex,
+                  age = excluded.age,
+                  height = excluded.height,
+                  weight = excluded.weight,
+                  activity = excluded.activity,
+                  allergies = excluded.allergies,
+                  week_starts_on = excluded.week_starts_on,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    user["id"],
+                    payload.sex,
+                    payload.age,
+                    payload.height,
+                    payload.weight,
+                    payload.activity,
+                    payload.allergies.strip(),
+                    payload.weekStartsOn,
+                    utc_now(),
+                ),
+            )
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail="Email is already registered") from error
+
+    saved_user = connection.execute(
+        "SELECT * FROM users WHERE id = ?", (user["id"],)
+    ).fetchone()
+    saved_goals = connection.execute(
+        "SELECT * FROM goals WHERE user_id = ?", (user["id"],)
+    ).fetchone()
+    saved_preferences = connection.execute(
+        "SELECT * FROM user_settings WHERE user_id = ?", (user["id"],)
+    ).fetchone()
+    saved_settings = settings_out(saved_user, saved_goals, saved_preferences)
+    return SettingsUpdateOut(
+        user=user_out(saved_user),
+        goals=GoalsIn(**saved_settings.model_dump()),
+        settings=saved_settings,
+    )
+
+
+@app.put("/api/account/password", status_code=204)
+def change_password(
+    payload: PasswordChangeIn,
+    user: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    if not verify_password(payload.currentPassword, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if payload.currentPassword == payload.newPassword:
+        raise HTTPException(
+            status_code=400, detail="New password must be different from the current password"
+        )
+    with connection:
+        connection.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(payload.newPassword), user["id"]),
+        )
 
 
 @app.post("/api/logs", status_code=201)
@@ -366,6 +515,33 @@ async def analyze_vision(
             image.content_type,
             weight,
         )
+
+
+@app.post("/api/vision/barcode/scan")
+async def scan_barcode_frame(
+    image: UploadFile = File(...),
+    weight: float | None = Form(default=None),
+    _: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    """Decode a barcode out of a single live-camera frame and price it off Open Food
+    Facts. Polled by the client while the camera is on, so it stays quiet: 200 with a
+    `status` discriminator (none / unmatched / matched) rather than 404s every tick.
+    """
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Image is empty")
+    if len(image_bytes) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image must be 12 MB or smaller")
+    cascade = VisionCascade(connection)
+    code = await run_in_threadpool(cascade.decode_barcode, image_bytes)
+    if not code:
+        return {"status": "none", "barcode": None, "result": None}
+    with connection:
+        result = await cascade.lookup_barcode(code, weight)
+    if result is None:
+        return {"status": "unmatched", "barcode": code, "result": None}
+    return {"status": "matched", "barcode": code, "result": result}
 
 
 @app.get("/api/coach/tip", response_model=CoachOut)

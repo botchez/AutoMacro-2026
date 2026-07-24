@@ -99,6 +99,89 @@ class VisionCascade:
         )
         return payload
 
+    # --- direct barcode lookup (client decoded it; skip the model entirely) -------
+
+    async def lookup_barcode(self, barcode: str, weight: float | None) -> dict | None:
+        """Price a client-decoded barcode straight off Open Food Facts.
+
+        Returns the flat {items, provider, cached} payload, or None when the product
+        isn't in Open Food Facts (or the lookup is unavailable) so the caller can fall
+        back to a normal photo capture. No model call, no image upload.
+        """
+        weight_g = weight if weight and weight > 0 else None
+        digest = f"barcode:{barcode}:{round(weight or 0, 1)}"
+        cached = self.connection.execute(
+            "SELECT payload_json FROM vision_cache WHERE image_sha256 = ?",
+            (digest,),
+        ).fetchone()
+        if cached:
+            payload = json.loads(cached["payload_json"])
+            payload["cached"] = True
+            return payload
+
+        # The OFF lookup is a blocking HTTP call with a timeout; keep it off the loop.
+        off = await run_in_threadpool(self._off_lookup, barcode)
+        if off is None:
+            return None
+
+        grams = weight_g if weight_g is not None else DEFAULT_TOTAL_GRAMS
+        macros = off.get("macros_per_100g") or {}
+        factor = grams / 100
+        item = {
+            "name": off.get("food_name") or f"Barcode {barcode}",
+            "grams": round(grams, 1),
+            "calories": round((macros.get("kcal") or 0.0) * factor),
+            "protein": round((macros.get("protein") or 0.0) * factor, 1),
+            "carbs": round((macros.get("carbs") or 0.0) * factor, 1),
+            "fat": round((macros.get("fat") or 0.0) * factor, 1),
+            "confidence": _SOURCE_CONFIDENCE["barcode"],
+            "fdcId": barcode,
+            "source": _SOURCE_LABEL["barcode"],
+        }
+        payload = {"items": [item], "provider": "barcode/openfoodfacts", "cached": False}
+        self.connection.execute(
+            """
+            INSERT OR REPLACE INTO vision_cache
+            (image_sha256, payload_json, provider, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (digest, json.dumps(payload), "barcode/openfoodfacts", utc_now()),
+        )
+        return payload
+
+    @staticmethod
+    def decode_barcode(image: bytes) -> str | None:
+        """Decode the first barcode in a frame with pyzbar (classical CV, no model).
+
+        Imported lazily so a missing native zbar lib degrades to None rather than
+        breaking the endpoint. Runs on the ORIGINAL frame bytes — barcodes want
+        resolution and pyzbar is local + free.
+        """
+        try:
+            from ..vision.identify import _decode_barcode
+        except Exception:  # noqa: BLE001 - engine/zbar unavailable -> no decode
+            return None
+        try:
+            return _decode_barcode(image)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _off_lookup(barcode: str) -> dict | None:
+        """Best-effort Open Food Facts barcode lookup, reusing the cascade's client.
+
+        Imported lazily (like the cascade) so a missing optional dep or an offline box
+        degrades to None -> the endpoint 404s and the UI falls back to photo capture.
+        """
+        try:
+            from ..vision.identify import _off_lookup as off_lookup
+        except Exception:  # noqa: BLE001 - engine unavailable -> no barcode lookup
+            return None
+        try:
+            return off_lookup(barcode)
+        except Exception:  # noqa: BLE001 - offline / not found -> fall back
+            return None
+
     # --- the validated cascade, adapted to the flat item contract ----------------
 
     def _run_cascade(

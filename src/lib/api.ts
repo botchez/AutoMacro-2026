@@ -1,10 +1,11 @@
-import type { DayLog, FoodItem, Goals, MealEntry, User } from "./store";
+import type { DayLog, FoodItem, Goals, MealEntry, User, UserSettings } from "./store";
 
 const TOKEN_KEY = "nutricoach:session";
 
 type AppState = {
   user: User;
   goals: Goals | null;
+  settings: UserSettings | null;
   logs: DayLog[];
 };
 
@@ -87,6 +88,20 @@ export const api = {
   },
   saveGoals: (goals: Goals) =>
     request<Goals>("/api/goals", { method: "PUT", body: JSON.stringify(goals) }),
+  saveSettings: (settings: UserSettings) =>
+    request<{
+      user: Exclude<User, null>;
+      goals: Goals;
+      settings: UserSettings;
+    }>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>("/api/account/password", {
+      method: "PUT",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
   addMeal: (date: string, meal: MealEntry) =>
     request<{ id: string }>("/api/logs", {
       method: "POST",
@@ -109,6 +124,16 @@ export const api = {
       method: "POST",
       body: form,
     });
+  },
+  scanBarcodeFrame: (frame: Blob, weight?: number) => {
+    const form = new FormData();
+    form.append("image", frame, "frame.jpg");
+    if (weight && weight > 0) form.append("weight", String(weight));
+    return request<{
+      status: "none" | "unmatched" | "matched";
+      barcode: string | null;
+      result: VisionResponse | null;
+    }>("/api/vision/barcode/scan", { method: "POST", body: form });
   },
   coachTip: () => request<CoachResponse>("/api/coach/tip"),
   coachHistory: () =>

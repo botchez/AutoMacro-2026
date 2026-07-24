@@ -1,3 +1,5 @@
+import { Check } from "lucide-react";
+
 type Props = {
   label: string;
   value: number;
@@ -47,8 +49,11 @@ export function MacroRing({ label, value, goal, color, unit = "g", size = 120 }:
           </div>
         </div>
         {hit && (
-          <div className="absolute -top-1 -right-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-2 py-0.5 shadow animate-pop">
-            ✓
+          <div
+            className="absolute -top-1 -right-1 grid h-6 w-6 place-items-center rounded-full bg-primary text-primary-foreground shadow animate-pop"
+            aria-label="Target reached"
+          >
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
           </div>
         )}
       </div>

@@ -24,8 +24,8 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import logFoodCoach from "@/assets/latspread.png";
 import { AppLayout } from "@/components/AppLayout";
-import { Mascot } from "@/components/Mascot";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -94,13 +94,31 @@ type PendingCapture = {
   servingGrams: number | null; // grams per serving from the label/OFF, if known
 };
 
+// Grab a JPEG frame from the live <video> for the server-side barcode scanner. 1024px
+// on the long edge at q0.85 keeps the bars crisp enough that pyzbar decodes on the
+// first clean look (blurry/tiny frames are the main reason a scan needs several tries);
+// it's still small to upload on localhost. Returns null until the video has pixels.
+async function grabFrame(video: HTMLVideoElement, maxEdge = 1024): Promise<Blob | null> {
+  const { videoWidth: w, videoHeight: h } = video;
+  if (!w || !h) return null;
+  const scale = Math.min(1, maxEdge / Math.max(w, h));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+}
+
 function LogFood() {
-  const { user, goals, addMeal, updateMeal, deleteMeal, logs, ready } = useApp();
+  const { user, goals, settings, addMeal, updateMeal, deleteMeal, logs, ready } = useApp();
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialDate = useMemo(() => parseIsoDate(todayIso()), []);
   const [selectedDate, setSelectedDate] = useState(todayIso());
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(initialDate));
+  const weekStartsOn = settings?.weekStartsOn ?? "monday";
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(initialDate, weekStartsOn));
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [mealHour, setMealHour] = useState(new Date().getHours().toString().padStart(2, "0"));
@@ -141,6 +159,11 @@ function LogFood() {
   const acquiringRef = useRef(false);
   // Deferred camera teardown handle; see the auto-start effect below.
   const teardownRef = useRef<number | null>(null);
+  // Live barcode auto-scan bookkeeping. `last` de-dupes repeat toasts for an unmatched
+  // code; `weight` lets the scan loop (which only re-subscribes on cameraOn) read fresh
+  // grams without restarting.
+  const lastBarcodeRef = useRef<string | null>(null);
+  const weightRef = useRef(0);
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [mealItems, setMealItems] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
@@ -167,6 +190,10 @@ function LogFood() {
     const interval = window.setInterval(() => setCurrentTime(new Date()), 30_000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setWeekStart(startOfWeek(parseIsoDate(selectedDate), weekStartsOn));
+  }, [selectedDate, weekStartsOn]);
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -309,6 +336,8 @@ function LogFood() {
   // freezes a reading (>0) for the analysis call.
   const liveWeight = Math.max(0, (scale.connected ? (scale.weight ?? 0) : mockWeight) - tareOffset);
   const displayedWeight = capturedWeight > 0 ? capturedWeight : liveWeight;
+  // Keep the barcode scan loop (subscribed only on cameraOn) reading the latest weight.
+  weightRef.current = displayedWeight;
   const selectedDay = logs.find((day) => day.date === selectedDate);
   const mealTotals = useMemo(
     () => sumMacros([{ id: "draft", time: mealTime, items: mealItems }]),
@@ -325,14 +354,14 @@ function LogFood() {
 
   const chooseDate = (date: Date) => {
     setSelectedDate(toIsoDate(date));
-    setWeekStart(startOfWeek(date));
+    setWeekStart(startOfWeek(date, weekStartsOn));
     setCalendarOpen(false);
   };
 
   const shiftWeek = (days: number) => {
     const nextDate = addDays(parseIsoDate(selectedDate), days);
     setSelectedDate(toIsoDate(nextDate));
-    setWeekStart(startOfWeek(nextDate));
+    setWeekStart(startOfWeek(nextDate, weekStartsOn));
   };
 
   const openLogEditor = (hour: number) => {
@@ -369,7 +398,7 @@ function LogFood() {
     const now = new Date();
     const today = todayIso();
     setSelectedDate(today);
-    setWeekStart(startOfWeek(parseIsoDate(today)));
+    setWeekStart(startOfWeek(parseIsoDate(today), weekStartsOn));
     setMealHour(now.getHours().toString().padStart(2, "0"));
     setMealMinute(now.getMinutes().toString().padStart(2, "0"));
     setEditorOpen(true);
@@ -458,6 +487,8 @@ function LogFood() {
     setImagePreview(URL.createObjectURL(file));
     setScanning(true);
     try {
+      // The server cascade decodes any barcode in the frame (pyzbar) before the model,
+      // so a captured/uploaded barcode photo already resolves to the exact product.
       const result = await api.analyze(file, grams);
       setVisionProvider(result.provider);
       return result.items.map((item) => ({ ...item, id: uid() }));
@@ -682,6 +713,60 @@ function LogFood() {
     }
   }, [autoActive, scale.connected, editorOpen]);
 
+  // While the camera is live, continuously scan for a barcode: grab a frame, POST it to
+  // the pyzbar decode endpoint, and fire the NEXT frame the moment that one returns (a
+  // self-scheduling loop, not a fixed timer) so the effective rate is capped only by the
+  // round-trip — snappy on localhost. The instant a barcode resolves to a product we
+  // stop the camera and load it, no capture press. Works everywhere (server-side decode).
+  useEffect(() => {
+    if (!cameraOn) return;
+    lastBarcodeRef.current = null;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const scanOnce = async () => {
+      if (cancelled) return;
+      const video = videoRef.current;
+      if (video && video.videoWidth) {
+        try {
+          const frame = await grabFrame(video);
+          if (!cancelled && frame) {
+            const res = await api.scanBarcodeFrame(frame, weightRef.current);
+            if (cancelled) return;
+            if (res.status === "matched" && res.result) {
+              stopCamera(); // flips cameraOn -> this effect's cleanup halts the loop
+              const items = res.result.items.map((item) => ({ ...item, id: uid() }));
+              setDetected(items);
+              setVisionProvider(res.result.provider);
+              toast.success(`Barcode matched: ${items[0]?.name ?? res.barcode}`, {
+                description: "Review the portion before adding it to the meal.",
+              });
+              return; // matched -> stop the loop
+            }
+            if (res.status === "unmatched" && res.barcode !== lastBarcodeRef.current) {
+              // Read a code, but it isn't in Open Food Facts. Note it once and keep
+              // scanning — the user can reposition or snap a photo for the model instead.
+              lastBarcodeRef.current = res.barcode;
+              toast.error(`Barcode ${res.barcode} isn't in the food database.`, {
+                description: "Try another angle, or capture a photo to analyze it.",
+              });
+            }
+          }
+        } catch {
+          // Network hiccup -> ignore and try the next frame.
+        }
+      }
+      // Tiny gap keeps the loop from busy-spinning if the video isn't ready yet.
+      if (!cancelled) timer = window.setTimeout(scanOnce, 120);
+    };
+    void scanOnce();
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [cameraOn]);
+
   const addReferenceFood = (food: (typeof MOCK_FOOD_DB)[number]) => {
     const grams = capturedWeight > 0 ? capturedWeight : 100;
     setMealItems((current) => [
@@ -762,7 +847,11 @@ function LogFood() {
     <AppLayout>
       <div className="space-y-5">
         <header className="flex items-center gap-4">
-          <Mascot size={64} className="animate-float shrink-0" />
+          <img
+            src={logFoodCoach}
+            alt="NutriCoach ready to help log food"
+            className="h-20 w-16 shrink-0 object-contain object-bottom"
+          />
           <div>
             <div className="text-sm font-semibold text-primary">Log food</div>
             <h1 className="text-2xl font-black md:text-3xl">Your food timeline</h1>
@@ -780,6 +869,7 @@ function LogFood() {
           onNext={() => shiftWeek(7)}
           calendarOpen={calendarOpen}
           onCalendarOpenChange={setCalendarOpen}
+          weekStartsOn={weekStartsOn}
         />
 
         <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -866,7 +956,7 @@ function LogFood() {
       </div>
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-        <DialogContent className="flex h-[92vh] max-h-[860px] w-[calc(100%-1rem)] flex-col overflow-hidden rounded-3xl p-0 sm:max-w-5xl">
+        <DialogContent className="flex h-[92vh] max-h-[860px] w-[calc(100%-1rem)] flex-col overflow-hidden rounded-3xl p-0 sm:max-w-[96vw] 2xl:max-w-7xl">
           <DialogHeader className="shrink-0 border-b px-5 py-4 text-left">
             <DialogTitle className="flex items-center gap-2 text-xl">
               <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">
@@ -879,8 +969,8 @@ function LogFood() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid min-h-0 flex-1 grid-rows-[minmax(280px,42%)_minmax(0,1fr)] lg:grid-cols-[1.1fr_0.9fr] lg:grid-rows-1">
-            <div className="flex min-h-0 flex-col overflow-hidden border-b lg:border-b-0 lg:border-r">
+          <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1.05fr)_minmax(300px,0.85fr)_minmax(300px,0.72fr)] lg:grid-rows-1 lg:overflow-hidden">
+            <div className="flex min-h-80 flex-col overflow-hidden border-b lg:min-h-0 lg:border-b-0 lg:border-r">
               <div className="flex shrink-0 items-center justify-between px-5 py-3">
                 <div>
                   <h3 className="flex items-center gap-2 font-black">
@@ -897,7 +987,6 @@ function LogFood() {
                 {cameraOn ? (
                   <div className="relative z-10 flex w-full flex-col items-center">
                     <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-black">
-                      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
                       <video
                         ref={attachStream}
                         autoPlay
@@ -978,6 +1067,10 @@ function LogFood() {
                         </>
                       )}
                     </Button>
+                    <div className="mt-2 flex items-center gap-1.5 text-[11px] font-bold text-white/70">
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-green-400" />
+                      Barcode auto-scan on — hold a label up to log it instantly
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -1049,7 +1142,7 @@ function LogFood() {
               </div>
             </div>
 
-            <div className="min-h-0 space-y-4 overflow-y-auto p-5">
+            <div className="space-y-4 p-5 lg:min-h-0 lg:overflow-y-auto">
               <section className="rounded-2xl bg-gradient-to-br from-sky/10 to-primary/10 p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -1375,39 +1468,46 @@ function LogFood() {
                   ))}
                 </div>
               </section>
+            </div>
 
-              <section className="rounded-2xl border bg-primary/5 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
-                      Review meal
-                    </div>
-                    <h3 className="mt-0.5 text-lg font-black">
-                      {mealItems.length} item{mealItems.length === 1 ? "" : "s"} selected
-                    </h3>
+            <aside className="flex min-h-96 flex-col border-t bg-primary/5 p-5 lg:min-h-0 lg:border-l lg:border-t-0">
+              <div className="flex shrink-0 items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
+                    Review meal
                   </div>
-                  <span className="rounded-full bg-white px-3 py-1 text-xs font-extrabold shadow-sm">
-                    {Math.round(mealTotals.calories)} kcal
-                  </span>
+                  <h3 className="mt-0.5 text-lg font-black">
+                    {mealItems.length} item{mealItems.length === 1 ? "" : "s"} selected
+                  </h3>
                 </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-extrabold shadow-sm">
+                  {Math.round(mealTotals.calories)} kcal
+                </span>
+              </div>
 
-                <div className="mt-3 max-h-52 overflow-y-auto pr-1">
-                  {mealItems.length ? (
-                    <FoodRows
-                      items={mealItems}
-                      onResize={(id, grams) => resizeItem(mealItems, setMealItems, id, grams)}
-                      onRemove={(id) =>
-                        setMealItems((current) => current.filter((item) => item.id !== id))
-                      }
-                    />
-                  ) : (
-                    <div className="rounded-xl border border-dashed bg-white/60 p-4 text-center text-xs text-muted-foreground">
-                      Scan your plate or choose a food above to review it here.
+              <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+                {mealItems.length ? (
+                  <FoodRows
+                    items={mealItems}
+                    onResize={(id, grams) => resizeItem(mealItems, setMealItems, id, grams)}
+                    onRemove={(id) =>
+                      setMealItems((current) => current.filter((item) => item.id !== id))
+                    }
+                  />
+                ) : (
+                  <div className="flex h-full min-h-40 items-center justify-center rounded-2xl border border-dashed bg-white/60 p-5 text-center">
+                    <div>
+                      <Utensils className="mx-auto h-7 w-7 text-muted-foreground/40" />
+                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                        Scan your plate or choose a food from the middle column to review it here.
+                      </p>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
+              </div>
 
-                <div className="mt-3 grid grid-cols-4 gap-2">
+              <div className="mt-4 shrink-0">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
                   <ConfirmMacro label="Calories" value={mealTotals.calories} />
                   <ConfirmMacro label="Protein" value={mealTotals.protein} />
                   <ConfirmMacro label="Carbs" value={mealTotals.carbs} />
@@ -1431,20 +1531,20 @@ function LogFood() {
                     </>
                   ) : (
                     <>
-                      <Check className="mr-2 h-4 w-4" /> Review complete · Confirm and save
+                      <Check className="mr-2 h-4 w-4" /> Confirm and save
                     </>
                   )}
                 </Button>
-              </section>
 
-              <Button
-                onClick={() => setEditorOpen(false)}
-                variant="ghost"
-                className="w-full rounded-xl font-bold"
-              >
-                Close and keep editing later
-              </Button>
-            </div>
+                <Button
+                  onClick={() => setEditorOpen(false)}
+                  variant="ghost"
+                  className="mt-2 w-full rounded-xl font-bold"
+                >
+                  Close and keep editing later
+                </Button>
+              </div>
+            </aside>
           </div>
         </DialogContent>
       </Dialog>
@@ -1460,6 +1560,7 @@ function WeekBar({
   onNext,
   calendarOpen,
   onCalendarOpenChange,
+  weekStartsOn,
 }: {
   days: Date[];
   selectedDate: string;
@@ -1468,6 +1569,7 @@ function WeekBar({
   onNext: () => void;
   calendarOpen: boolean;
   onCalendarOpenChange: (open: boolean) => void;
+  weekStartsOn: "monday" | "sunday";
 }) {
   return (
     <section className="relative rounded-2xl border bg-white p-2 shadow-sm">
@@ -1536,6 +1638,7 @@ function WeekBar({
             <Calendar
               mode="single"
               selected={parseIsoDate(selectedDate)}
+              weekStartsOn={weekStartsOn === "monday" ? 1 : 0}
               onSelect={(date) => {
                 if (date) onSelect(date);
               }}
@@ -1757,9 +1860,9 @@ function toIsoDate(date: Date) {
   return local.toISOString().slice(0, 10);
 }
 
-function startOfWeek(date: Date) {
+function startOfWeek(date: Date, weekStartsOn: "monday" | "sunday") {
   const start = new Date(date);
-  const offset = (start.getDay() + 6) % 7;
+  const offset = weekStartsOn === "monday" ? (start.getDay() + 6) % 7 : start.getDay();
   start.setDate(start.getDate() - offset);
   start.setHours(12, 0, 0, 0);
   return start;

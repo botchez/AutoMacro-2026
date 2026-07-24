@@ -4,6 +4,8 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 TEST_DIR = tempfile.TemporaryDirectory()
@@ -12,7 +14,33 @@ os.environ["NUTRICOACH_FRONTEND_DIST"] = str(Path(TEST_DIR.name) / "dist")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from backend.coach.agent import CoachResult  # noqa: E402
+from backend.db import connect  # noqa: E402
 from backend.main import app  # noqa: E402
+from backend.services.coach import CoachService  # noqa: E402
+
+# Stand-in settings so the coach's agent path is active without depending on a real
+# OPENROUTER_API_KEY / .env; run_coach is mocked, so nothing hits the network.
+_AGENT_SETTINGS = SimpleNamespace(
+    openrouter_api_key="test-key", coach_agent_enabled=True, transcripts_dir=None
+)
+
+
+def fake_run_coach(state, trigger, verbose=True, mode="auto", history=None):
+    """Stand-in for the real agent: returns advice + suggestions without any network."""
+    if mode == "auto":
+        return CoachResult(
+            "Nice batch — add a bit more protein to close the gap.",
+            [],
+            "mock-model",
+            [{"name": "Greek yogurt", "serving": "200 g", "reason": "Quick protein"}],
+        )
+    return CoachResult(
+        f"Here's my take on: {trigger}",
+        [],
+        "mock-model",
+        [{"name": "Chicken breast", "serving": "150 g", "reason": "Lean protein"}],
+    )
 
 
 class ApiFlowTests(unittest.TestCase):
@@ -87,31 +115,41 @@ class ApiFlowTests(unittest.TestCase):
         )
         self.assertEqual(saved["time"], "13:15")
         self.assertEqual(saved["items"][0]["grams"], 220)
-        coach = self.client.get("/api/coach/tip", headers=self.headers)
-        self.assertEqual(coach.status_code, 200)
-        self.assertTrue(coach.json()["message"])
-        self.assertTrue(coach.json()["recommendations"])
-        question = self.client.post(
-            "/api/coach/message",
-            headers=self.headers,
-            json={"message": "What should I eat next?"},
-        )
-        self.assertEqual(question.status_code, 200)
-        protein_names = [
-            item["name"] for item in question.json()["recommendations"]
-        ]
-        dinner = self.client.post(
-            "/api/coach/message",
-            headers=self.headers,
-            json={"message": "Help me balance dinner"},
-        )
-        self.assertEqual(dinner.status_code, 200)
-        dinner_names = [item["name"] for item in dinner.json()["recommendations"]]
-        self.assertNotEqual(protein_names, dinner_names)
-        history = self.client.get("/api/coach/history", headers=self.headers)
-        self.assertEqual(history.status_code, 200)
-        self.assertGreaterEqual(len(history.json()["messages"]), 3)
-        self.assertTrue(history.json()["recommendations"])
+        # The coach runs the (mocked) agent. Suggestions are agent-driven via
+        # suggest_foods, shaped {name, serving, reason}.
+        with patch("backend.services.coach.run_coach", side_effect=fake_run_coach), patch(
+            "backend.services.coach.settings", _AGENT_SETTINGS
+        ):
+            coach = self.client.get("/api/coach/tip", headers=self.headers)
+            self.assertEqual(coach.status_code, 200, coach.text)
+            self.assertEqual(coach.json()["source"], "coach-agent")
+            self.assertTrue(coach.json()["message"])
+            recs = coach.json()["recommendations"]
+            self.assertTrue(recs)
+            self.assertEqual(set(recs[0]), {"name", "serving", "reason"})
+            question = self.client.post(
+                "/api/coach/message",
+                headers=self.headers,
+                json={"message": "What should I eat next?"},
+            )
+            self.assertEqual(question.status_code, 200)
+            self.assertIsInstance(question.json()["recommendations"], list)
+            history = self.client.get("/api/coach/history", headers=self.headers)
+            self.assertEqual(history.status_code, 200)
+            self.assertGreaterEqual(len(history.json()["messages"]), 2)
+            # The sidebar persists the coach's latest suggestions across reloads.
+            self.assertTrue(history.json()["recommendations"])
+
+        # Fail loud: when the agent errors there is no rule fallback — the coach
+        # surfaces a 502 with the reason instead of a canned reply.
+        with patch(
+            "backend.services.coach.run_coach",
+            side_effect=RuntimeError("no choices from model"),
+        ), patch("backend.services.coach.settings", _AGENT_SETTINGS):
+            failed = self.client.get("/api/coach/tip", headers=self.headers)
+            self.assertEqual(failed.status_code, 502)
+            self.assertIn("coach agent error", failed.json()["detail"])
+
         deleted = self.client.delete("/api/logs/test-meal", headers=self.headers)
         self.assertEqual(deleted.status_code, 204)
 
@@ -133,6 +171,72 @@ class ApiFlowTests(unittest.TestCase):
             data={"weight": "120"},
         )
         self.assertTrue(second.json()["cached"])
+
+    def test_settings_and_password_validation(self):
+        settings = {
+            "name": "Demo User",
+            "email": "demo@nutricoach.app",
+            "goalType": "maintain",
+            "calories": 2300,
+            "protein": 150,
+            "carbs": 265,
+            "fat": 70,
+            "dietary": "Pescatarian",
+            "units": "metric",
+            "sex": "prefer-not",
+            "age": 31,
+            "height": 171,
+            "weight": 69.5,
+            "activity": "moderate",
+            "allergies": "Peanuts",
+            "weekStartsOn": "sunday",
+        }
+        response = self.client.put(
+            "/api/settings", headers=self.headers, json=settings
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["user"]["name"], "Demo User")
+        self.assertEqual(response.json()["settings"]["protein"], 150)
+        self.assertEqual(response.json()["settings"]["weekStartsOn"], "sunday")
+
+        state = self.client.get("/api/state", headers=self.headers).json()
+        self.assertEqual(state["settings"]["allergies"], "Peanuts")
+        self.assertEqual(state["goals"]["calories"], 2300)
+        connection = connect()
+        try:
+            coach_state = CoachService(connection)._build_state(state["user"]["id"])
+        finally:
+            connection.close()
+        self.assertEqual(coach_state.target["dietary"], "Pescatarian")
+        self.assertEqual(coach_state.target["allergies"], "Peanuts")
+
+        rejected = self.client.put(
+            "/api/account/password",
+            headers=self.headers,
+            json={
+                "currentPassword": "wrongpass",
+                "newPassword": "a-different-password",
+            },
+        )
+        self.assertEqual(rejected.status_code, 400)
+        changed = self.client.put(
+            "/api/account/password",
+            headers=self.headers,
+            json={
+                "currentPassword": "demo1234",
+                "newPassword": "demo5678",
+            },
+        )
+        self.assertEqual(changed.status_code, 204)
+        restored = self.client.put(
+            "/api/account/password",
+            headers=self.headers,
+            json={
+                "currentPassword": "demo5678",
+                "newPassword": "demo1234",
+            },
+        )
+        self.assertEqual(restored.status_code, 204)
 
 
 if __name__ == "__main__":

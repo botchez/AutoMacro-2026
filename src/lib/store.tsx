@@ -22,6 +22,18 @@ export type Goals = Macros & {
   units: "metric" | "imperial";
 };
 
+export type UserSettings = Goals & {
+  name: string;
+  email: string;
+  sex: "female" | "male" | "other" | "prefer-not";
+  age: number | null;
+  height: number | null;
+  weight: number | null;
+  activity: "low" | "light" | "moderate" | "high";
+  allergies: string;
+  weekStartsOn: "monday" | "sunday";
+};
+
 export type FoodItem = {
   id: string;
   name: string;
@@ -46,16 +58,22 @@ export type User = { id: string; name: string; email: string } | null;
 type State = {
   user: User;
   goals: Goals | null;
+  settings: UserSettings | null;
   logs: DayLog[];
 };
 
 type Ctx = State & {
   ready: boolean;
   busy: boolean;
+  // Bumps once per successfully saved batch. The CoachPanel watches it and runs the
+  // same coach check the "Test coach" button runs, so logging food auto-pings the coach.
+  mealsLogged: number;
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   setGoals: (goals: Goals) => Promise<void>;
+  updateSettings: (settings: UserSettings) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   addMeal: (date: string, meal: MealEntry) => Promise<void>;
   updateMeal: (date: string, meal: MealEntry) => Promise<void>;
   deleteMeal: (mealId: string) => Promise<void>;
@@ -64,12 +82,13 @@ type Ctx = State & {
 };
 
 const AppCtx = createContext<Ctx | null>(null);
-const emptyState: State = { user: null, goals: null, logs: [] };
+const emptyState: State = { user: null, goals: null, settings: null, logs: [] };
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(emptyState);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [mealsLogged, setMealsLogged] = useState(0);
 
   const refresh = useCallback(async () => {
     if (!api.hasSession()) {
@@ -102,7 +121,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setBusy(true);
     try {
       const user = await api.signup(name, email, password);
-      setState({ user, goals: null, logs: [] });
+      setState({ user, goals: null, settings: null, logs: [] });
     } finally {
       setBusy(false);
     }
@@ -115,7 +134,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setGoals = useCallback(async (goals: Goals) => {
     const saved = await api.saveGoals(goals);
-    setState((current) => ({ ...current, goals: saved }));
+    setState((current) => ({
+      ...current,
+      goals: saved,
+      settings:
+        current.settings ??
+        (current.user
+          ? {
+              ...saved,
+              name: current.user.name,
+              email: current.user.email,
+              sex: "prefer-not",
+              age: null,
+              height: null,
+              weight: null,
+              activity: "moderate",
+              allergies: "",
+              weekStartsOn: "monday",
+            }
+          : null),
+    }));
+  }, []);
+
+  const updateSettings = useCallback(async (settings: UserSettings) => {
+    const saved = await api.saveSettings(settings);
+    setState((current) => ({ ...current, ...saved }));
+  }, []);
+
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    await api.changePassword(currentPassword, newPassword);
   }, []);
 
   const addMeal = useCallback(async (date: string, meal: MealEntry) => {
@@ -131,6 +178,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logs.sort((a, b) => (a.date < b.date ? 1 : -1));
       return { ...current, logs };
     });
+    // Every logged batch auto-triggers the coach: coachTip() runs the agent in "auto"
+    // mode over the just-submitted batch and persists its advice, so the dashboard
+    // shows fresh coaching next time it loads. Fire-and-forget — never block the save.
+    void api.coachTip().catch(() => {});
+    // Signal any mounted CoachPanel to run its coach check live (see mealsLogged).
+    setMealsLogged((count) => count + 1);
   }, []);
 
   const updateMeal = useCallback(async (date: string, meal: MealEntry) => {
@@ -174,10 +227,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ...state,
       ready,
       busy,
+      mealsLogged,
       login,
       signup,
       logout,
       setGoals,
+      updateSettings,
+      changePassword,
       addMeal,
       updateMeal,
       deleteMeal,
@@ -188,10 +244,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       state,
       ready,
       busy,
+      mealsLogged,
       login,
       signup,
       logout,
       setGoals,
+      updateSettings,
+      changePassword,
       addMeal,
       updateMeal,
       deleteMeal,

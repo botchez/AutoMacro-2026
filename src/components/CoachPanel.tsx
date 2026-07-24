@@ -1,17 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  Bot,
-  CheckCircle2,
-  FlaskConical,
-  Loader2,
-  Plus,
-  Send,
-  Sparkles,
-  Utensils,
-} from "lucide-react";
+import { CheckCircle2, FlaskConical, Loader2, Plus, Send, Sparkles, Utensils } from "lucide-react";
+import coachHero from "@/assets/bicepsflex.png";
 import { api, type CoachMessage, type CoachRecommendation } from "@/lib/api";
-import { Mascot } from "./Mascot";
+import { useApp } from "@/lib/store";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
@@ -25,6 +17,7 @@ export function CoachPanel() {
   const [loading, setLoading] = useState(true);
   const [testStatus, setTestStatus] = useState<"idle" | "running" | "passed" | "failed">("idle");
   const threadRef = useRef<HTMLDivElement>(null);
+  const { mealsLogged } = useApp();
 
   useEffect(() => {
     const loadConversation = async () => {
@@ -91,19 +84,23 @@ export function CoachPanel() {
           createdAt: new Date().toISOString(),
         },
       ]);
-      setRecommendations(
-        Array.isArray(response.recommendations)
-          ? response.recommendations
-          : fallbackRecommendations(trimmed),
-      );
+      // Sidebar is agent-driven: show the coach's suggestions for this answer, or
+      // keep the previous ones when it didn't name any (the backend returns the
+      // stored set unchanged in that case).
+      if (Array.isArray(response.recommendations)) setRecommendations(response.recommendations);
       setRecommendationContext(trimmed);
       if (isTest) setTestStatus("passed");
-    } catch {
+    } catch (error) {
+      // Surface the real failure instead of a soothing non-answer — the coach fails
+      // loud now, so show why (e.g. the 502 detail from the agent) for diagnosis.
       setMessages((current) => [
         ...current,
         {
           role: "assistant",
-          content: "I couldn’t refresh that answer. Try again after your next meal.",
+          content:
+            error instanceof Error
+              ? `⚠️ Coach unavailable: ${error.message}`
+              : "⚠️ Coach unavailable.",
           createdAt: new Date().toISOString(),
         },
       ]);
@@ -112,6 +109,49 @@ export function CoachPanel() {
       setLoading(false);
     }
   };
+
+  // Runs the same coach check the "Test coach" button performs, but via the "auto"
+  // batch endpoint (coachTip) — it coaches the just-logged batch without injecting a
+  // fake user turn into the chat thread, and reflects on the button state.
+  const runBatchCheck = async () => {
+    if (loading) return;
+    setTestStatus("running");
+    // Clear the thread immediately so the reset is visible even when the fresh tip
+    // repeats the previous message's text; the server clears its copy too (below).
+    setMessages([]);
+    setLoading(true);
+    try {
+      const tip = await api.coachTip();
+      // A new batch resets the conversation (the server clears it too), so replace the
+      // thread with only this batch's coaching rather than appending to it.
+      setMessages([
+        { role: "assistant", content: tip.message, createdAt: new Date().toISOString() },
+      ]);
+      // A new batch fully resets the sidebar: show the coach's picks for this batch,
+      // or clear it when the batch is on track and the coach suggested nothing.
+      setRecommendations(Array.isArray(tip.recommendations) ? tip.recommendations : []);
+      setRecommendationContext("your latest logged meal");
+      setTestStatus("passed");
+    } catch {
+      setTestStatus("failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Keep the latest runBatchCheck in a ref so the meal-log effect can call it without
+  // re-firing on every render (the function is recreated each render).
+  const runBatchCheckRef = useRef(runBatchCheck);
+  runBatchCheckRef.current = runBatchCheck;
+
+  // Auto-ping the coach whenever a new batch of food is logged. Initialised to the
+  // current count so it never fires on mount — only on genuine in-session increments.
+  const seenMealsRef = useRef(mealsLogged);
+  useEffect(() => {
+    if (mealsLogged === seenMealsRef.current) return;
+    seenMealsRef.current = mealsLogged;
+    void runBatchCheckRef.current();
+  }, [mealsLogged]);
 
   return (
     <section className="relative overflow-hidden rounded-[2rem] border border-primary/20 bg-gradient-to-br from-primary/15 via-white to-sun/15 p-5 shadow-lg shadow-primary/5 md:p-7">
@@ -122,8 +162,12 @@ export function CoachPanel() {
       <div className="relative grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
           <div className="flex items-center gap-4">
-            <div className="grid h-20 w-20 shrink-0 place-items-center rounded-3xl bg-white shadow-sm">
-              <Mascot size={68} className="animate-float" />
+            <div className="flex h-24 w-24 shrink-0 items-end justify-center">
+              <img
+                src={coachHero}
+                alt="NutriCoach flexing"
+                className="h-24 w-24 object-contain object-bottom"
+              />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.16em] text-primary">
@@ -139,12 +183,7 @@ export function CoachPanel() {
               variant="outline"
               size="sm"
               disabled={loading}
-              onClick={() =>
-                void ask(
-                  "This is a coach connection test. Give me one short food recommendation based on today’s log.",
-                  true,
-                )
-              }
+              onClick={() => void runBatchCheck()}
               className="shrink-0 rounded-full bg-white px-3 font-bold"
             >
               {testStatus === "running" ? (
@@ -183,8 +222,8 @@ export function CoachPanel() {
                   }
                 >
                   {item.role === "assistant" && (
-                    <div className="mb-1 flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider text-primary">
-                      <Bot className="h-3 w-3" /> Coach
+                    <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-primary">
+                      Coach
                     </div>
                   )}
                   {item.content}
@@ -267,51 +306,26 @@ export function CoachPanel() {
                   <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
                     {food.reason}
                   </p>
+                  <Button
+                    asChild
+                    size="sm"
+                    variant="outline"
+                    className="mt-2.5 h-8 w-full rounded-lg text-xs font-bold"
+                  >
+                    <Link to="/log-food">
+                      <Plus className="mr-1.5 h-3.5 w-3.5" /> Add
+                    </Link>
+                  </Button>
                 </div>
               ))
             ) : (
               <div className="rounded-xl border border-dashed p-5 text-center text-xs text-muted-foreground">
-                Ask your coach to get food ideas for today.
+                Log a meal or ask your coach for ideas — its food suggestions show up here.
               </div>
             )}
           </div>
-
-          <Button asChild variant="outline" className="mt-4 w-full rounded-xl font-bold">
-            <Link to="/log-food">
-              <Plus className="mr-2 h-4 w-4" /> Log a recommended food
-            </Link>
-          </Button>
         </aside>
       </div>
     </section>
   );
-}
-
-function fallbackRecommendations(question: string): CoachRecommendation[] {
-  const query = question.toLowerCase();
-  const foods = query.includes("protein")
-    ? [
-        ["Greek yogurt", "A quick protein-focused option", "200 g"],
-        ["Grilled chicken breast", "Lean protein for a main meal", "150 g"],
-        ["Salmon fillet", "Protein with omega-3 fats", "150 g"],
-      ]
-    : query.includes("dinner")
-      ? [
-          ["Salmon fillet", "A balanced dinner protein", "150 g"],
-          ["Sweet potato", "Fiber-rich dinner carbohydrates", "1 medium"],
-          ["Steamed broccoli", "A light vegetable side", "1½ cups"],
-        ]
-      : query.includes("snack")
-        ? [
-            ["Greek yogurt", "A convenient protein snack", "200 g"],
-            ["Banana", "Quick portable energy", "1 medium"],
-            ["Almonds", "Healthy fats in a measured portion", "30 g"],
-          ]
-        : [
-            ["Brown rice", "Steady carbohydrates for energy", "1 cup cooked"],
-            ["Greek yogurt", "An easy protein addition", "200 g"],
-            ["Avocado", "Unsaturated fats for balance", "½ avocado"],
-          ];
-
-  return foods.map(([name, reason, serving]) => ({ name, reason, serving }));
 }

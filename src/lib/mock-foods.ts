@@ -98,10 +98,10 @@ export function scaleFood(perHundred: Macros, grams: number): Macros {
 }
 
 export const COACH_LINES = [
-  "You're on a roll! Keep going 🌟",
+  "You're on a roll! Keep going.",
   "Small bites, big wins.",
   "Protein first — future you says thanks!",
-  "Hydration counts too — grab some water 💧",
+  "Hydration counts too — grab some water.",
   "One healthy choice at a time.",
   "Consistency beats perfection. Always.",
 ];
