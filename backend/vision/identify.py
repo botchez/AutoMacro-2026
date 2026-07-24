@@ -129,10 +129,11 @@ For each component:
   "chicken breast, cooked", "vegetable oil". Food + cooked state ONLY; no brand or extra
   qualifiers. ALWAYS fill this for a non-packaged food so the FDC lookup can run. Leave
   "" only for a packaged product or a label component.
-- "off_query": for a PACKAGED product only, the brand + product name to search a
-  packaged-food database — e.g. "Coca-Cola Classic", "Pringles Original", "Alpro Soya
-  Yogurt". ALWAYS fill this for a packaged product so the Open Food Facts lookup can run.
-  Leave "" for non-packaged foods.
+- "off_query": for a PACKAGED product only, BRAND + CORE PRODUCT NAME to search a
+  packaged-food database — keep it SHORT and drop marketing adjectives, which make the
+  search miss: "Yeo's Soy Milk" (NOT "Yeo's Whole Bean Soy Milk"), "Coca-Cola" (NOT
+  "Coca-Cola Classic"), "Pringles Sour Cream", "Alpro Soya". ALWAYS fill this for a
+  packaged product so the Open Food Facts lookup can run. Leave "" for non-packaged foods.
 - "est_per_100g": macros per 100 g {{"kcal","protein","carbs","fat"}} — the values you
   read for a label, otherwise your best estimate. FALLBACK ONLY: used just if the DB
   lookup misses, so the app can still show something.
@@ -268,12 +269,43 @@ def _off_lookup(barcode: str) -> dict | None:
     }
 
 
+# Marketing/descriptor words that make an Open Food Facts free-text search miss the
+# product entirely (its search indexes the core brand + product, not every adjective on
+# the carton). Stripped only on a RETRY after the full query misses — "Yeo's Whole Bean
+# Soy Milk" finds nothing, but "Yeo's Soy Milk" resolves to the real Yeo's product.
+_OFF_FILLER = frozenset({
+    "whole", "bean", "beans", "original", "classic", "fresh", "natural", "pure",
+    "premium", "light", "rich", "creamy", "unsweetened", "sweetened", "low", "fat",
+    "free", "no", "added", "sugar", "reduced", "extra", "new", "real",
+})
+
+
+def _simplify_off_query(query: str) -> str:
+    """Drop descriptor adjectives from an OFF query, keeping brand + core product."""
+    words = [w for w in query.split() if w.lower().strip("'") not in _OFF_FILLER]
+    return " ".join(words)
+
+
 def _off_search(query: str) -> dict | None:
     """Best-effort Open Food Facts NAME search -> uniform per-100g, or None.
 
     For packaged/branded foods the model flagged but that have no scannable barcode.
-    Picks the most popular product that actually carries usable energy data.
+    Tries the full query first; on a miss, retries once with marketing adjectives
+    stripped (a long, descriptor-heavy name is the usual reason OFF returns nothing for a
+    product it actually lists) before the caller falls through to a generic FDC lookup.
     """
+    hit = _off_search_once(query)
+    if hit is not None:
+        return hit
+    simplified = _simplify_off_query(query)
+    if simplified and simplified.lower() != query.lower():
+        return _off_search_once(simplified)
+    return None
+
+
+def _off_search_once(query: str) -> dict | None:
+    """A single Open Food Facts name search. Picks the most popular product that
+    actually carries usable energy data, or None."""
     params = urllib.parse.urlencode({
         "search_terms": query,
         "search_simple": 1,
