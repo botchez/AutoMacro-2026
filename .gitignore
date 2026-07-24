@@ -37,4 +37,4 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
-foodfacts_cache.sqlite
+backend/vision/foodfacts_cache.sqlite
