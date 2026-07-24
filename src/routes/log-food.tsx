@@ -77,11 +77,28 @@ const MIN_CAPTURE_G = 5;
 const SETTLE_RETAIN_MS = 2000;
 const SETTLE_SAMPLE_MS = 80; // how often the auto loop samples the live weight
 const DEFAULT_SERVING_G = 30; // fallback serving size when the label/OFF has none
-// When there's no scale reading to apply (e.g. a plain photo upload with no hardware),
-// we still need a total weight to turn the model's per-100g + fraction ratios into
-// concrete macros. This nominal total is what the backend used to assume; now the math
-// lives here on the client, the assumption does too — the user can re-weigh to correct it.
-const FALLBACK_TOTAL_G = 180;
+// Deciding the total food weight to price a capture at, when the ratios come back from
+// the model. Priority:
+//   1. the real scale reading, if the food is on the scale — always wins;
+//   2. otherwise, for a SINGLE packaged product, its serving size (from Open Food Facts);
+//   3. otherwise, the model's own estimate of the total weight (whole/plated foods);
+//   4. last resort (no scale, no serving, no estimate — e.g. a barcode product with no
+//      serving on file): fall back to per-100g so the numbers are still meaningful.
+// There is deliberately NO fixed gram default — an unweighed food is the model's estimate
+// (or the label's serving), never a magic constant. The user can always adjust grams.
+type WeightBasis = "scale" | "serving" | "estimate" | "per100";
+
+function resolveTotalGrams(
+  items: { servingGrams?: number | null }[],
+  estimate: number | null,
+  scaleWeight: number,
+): { grams: number; basis: WeightBasis } {
+  if (scaleWeight > 0) return { grams: scaleWeight, basis: "scale" };
+  const serving = items.length === 1 ? (items[0]?.servingGrams ?? null) : null;
+  if (serving && serving > 0) return { grams: serving, basis: "serving" };
+  if (estimate && estimate > 0) return { grams: estimate, basis: "estimate" };
+  return { grams: 100, basis: "per100" };
+}
 
 // A detected food carries its per-100g density and fraction (its share of the plate) so
 // it can be re-priced at any weight, plus the source its nutrition came from and (for
@@ -700,7 +717,9 @@ function LogFood() {
   // Run the food-vision cascade on a frame and return the raw weight-independent
   // detections (per-100g + fraction), or null on error. No weight is sent — the caller
   // applies a total weight via materialize(). Shared by manual capture and the auto loop.
-  const analyzeImage = async (file: File): Promise<DetectedItem[] | null> => {
+  const analyzeImage = async (
+    file: File,
+  ): Promise<{ items: DetectedItem[]; estimatedGrams: number | null } | null> => {
     if (imagePreview) URL.revokeObjectURL(imagePreview);
     setImagePreview(URL.createObjectURL(file));
     setScanning(true);
@@ -710,7 +729,7 @@ function LogFood() {
       const result = await api.analyze(file);
       setVisionProvider(result.provider);
       setVisionDebug(result.debug ?? null);
-      return result.items;
+      return { items: result.items, estimatedGrams: result.estimatedGrams ?? null };
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not analyze that image");
       return null;
@@ -720,45 +739,54 @@ function LogFood() {
     }
   };
 
-  // The total weight to price a manual capture at: the captured/live scale reading when
-  // there is one, else the nominal fallback (the user can re-weigh to correct it).
-  const captureTotalGrams = () => {
-    const w = capturedWeight || displayedWeight;
-    return w > 0 ? w : FALLBACK_TOTAL_G;
-  };
-
   const captureImage = async (file: File) => {
-    const raw = await analyzeImage(file);
-    if (!raw) return;
-    const items = materialize(raw, captureTotalGrams());
+    const res = await analyzeImage(file);
+    if (!res) return;
+    const { grams: total, basis } = resolveTotalGrams(
+      res.items,
+      res.estimatedGrams,
+      capturedWeight || displayedWeight,
+    );
+    const items = materialize(res.items, total);
     setDetected(items);
+    const description =
+      basis === "scale"
+        ? "Review portions before adding them to the meal."
+        : basis === "serving"
+          ? `No scale — using the ${Math.round(total)}g serving size. Adjust grams if needed.`
+          : basis === "estimate"
+            ? `No scale — AI estimated ~${Math.round(total)}g total. Adjust grams if needed.`
+            : "No scale or serving size — showing per 100g. Adjust grams to your portion.";
     toast.success(`Found ${items.length} food${items.length === 1 ? "" : "s"}`, {
-      description: "Review portions before adding them to the meal.",
+      description,
     });
   };
 
-  // Scale a batch of detected foods (priced at `fromGrams` total) to a new total
-  // weight, preserving each food's share. Linear in grams, so this works for both
-  // "log by serving" and "weigh again".
-  const scaleDetected = (items: DetectedFood[], fromGrams: number, toGrams: number): FoodItem[] => {
-    const factor = fromGrams > 0 ? toGrams / fromGrams : 1;
-    return items.map((it) => ({
-      id: uid(),
-      name: it.name,
-      grams: Math.max(1, Math.round(it.grams * factor)),
-      calories: Math.round(it.calories * factor),
-      protein: round(it.protein * factor),
-      carbs: round(it.carbs * factor),
-      fat: round(it.fat * factor),
-      fdcId: it.fdcId,
-      source: it.source,
-    }));
-  };
+  // Price a batch of detected foods at a new TOTAL plate weight, from each food's own
+  // fraction + per-100g density (never from already-rounded macros — that compounds
+  // rounding). grams = fraction × total; macros = per100 × grams / 100.
+  const scaleDetected = (items: DetectedFood[], toGrams: number): FoodItem[] =>
+    items.map((it) => {
+      const grams = Math.max(1, Math.round(it.fraction * toGrams));
+      const factor = grams / 100;
+      return {
+        id: uid(),
+        name: it.name,
+        grams,
+        calories: Math.round(it.per100.calories * factor),
+        protein: round(it.per100.protein * factor),
+        carbs: round(it.per100.carbs * factor),
+        fat: round(it.per100.fat * factor),
+        fdcId: it.fdcId,
+        source: it.source,
+        per100: it.per100,
+      };
+    });
 
   // Commit a paused capture at `totalGrams`, then wait for the item to be lifted
   // off before arming the next capture.
   const commitPending = (pend: PendingCapture, totalGrams: number) => {
-    const scaled = scaleDetected(pend.items, pend.triggerGrams, totalGrams);
+    const scaled = scaleDetected(pend.items, totalGrams);
     setMealItems((current) => [...current, ...scaled]);
     toast.success(
       `Added ${scaled.length} food${scaled.length === 1 ? "" : "s"} · ${Math.round(totalGrams)}g — remove it for the next`,
@@ -813,8 +841,8 @@ function LogFood() {
         setAwaitingRemoval(true);
         return;
       }
-      const raw = await analyzeImage(file);
-      if (!raw || !raw.length) {
+      const res = await analyzeImage(file);
+      if (!res || !res.items.length) {
         toast.error("No food detected — remove the item and try again.");
         rearmNeededRef.current = true;
         readingsRef.current = [];
@@ -822,9 +850,9 @@ function LogFood() {
         return;
       }
       // The settled scale reading IS the total weight; price the detections at it here.
-      const items = materialize(raw, grams);
+      const items = materialize(res.items, grams);
       const triggerGrams = grams;
-      const servingGrams = raw.find((it) => it.servingGrams != null)?.servingGrams ?? null;
+      const servingGrams = res.items.find((it) => it.servingGrams != null)?.servingGrams ?? null;
       setPendingCapture({ items, triggerGrams, servingGrams });
       setServingSize(String(servingGrams ?? DEFAULT_SERVING_G));
       setServingCount("1");
@@ -964,14 +992,24 @@ function LogFood() {
             if (cancelled) return;
             if (res.status === "matched" && res.result) {
               stopCamera(); // flips cameraOn -> this effect's cleanup halts the loop
-              // Price the matched product at the live scale weight (or the fallback).
-              const total = weightRef.current > 0 ? weightRef.current : FALLBACK_TOTAL_G;
+              // Price the product at the scale weight, else its serving size (packaged
+              // products carry one), else per-100g — never a fixed default.
+              const { grams: total, basis } = resolveTotalGrams(
+                res.result.items,
+                res.result.estimatedGrams ?? null,
+                weightRef.current,
+              );
               const items = materialize(res.result.items, total);
               setDetected(items);
               setVisionProvider(res.result.provider);
               setVisionDebug(res.result.debug ?? null);
               toast.success(`Barcode matched: ${items[0]?.name ?? res.barcode}`, {
-                description: "Review the portion before adding it to the meal.",
+                description:
+                  basis === "scale"
+                    ? "Review the portion before adding it to the meal."
+                    : basis === "serving"
+                      ? `Using the ${Math.round(total)}g serving size — adjust grams if needed.`
+                      : "Showing per 100g — adjust grams to your portion.",
               });
               return; // matched -> stop the loop
             }
@@ -1003,7 +1041,14 @@ function LogFood() {
     const grams = capturedWeight > 0 ? capturedWeight : 100;
     setMealItems((current) => [
       ...current,
-      { id: uid(), name: food.name, grams, ...scaleFood(food.per100, grams), source: "manual" },
+      {
+        id: uid(),
+        name: food.name,
+        grams,
+        ...scaleFood(food.per100, grams),
+        per100: food.per100,
+        source: "manual",
+      },
     ]);
     toast.success(`${food.name} added to this meal`);
   };
@@ -1018,14 +1063,20 @@ function LogFood() {
       collection.map((item) => {
         if (item.id !== id) return item;
         const safeGrams = Math.max(1, grams);
-        const ratio = safeGrams / item.grams;
+        // Always recompute from the per-100g density, not by scaling the current
+        // (already-rounded) macros — the old ratio approach compounded rounding, so
+        // clearing the field to 1g and back to 120g mangled the numbers. Derive the
+        // density once if the item lacks it, and persist it so later edits stay stable.
+        const density = item.per100 ?? derivePer100(item);
+        const factor = safeGrams / 100;
         return {
           ...item,
           grams: safeGrams,
-          calories: Math.round(item.calories * ratio),
-          protein: round(item.protein * ratio),
-          carbs: round(item.carbs * ratio),
-          fat: round(item.fat * ratio),
+          per100: density,
+          calories: Math.round(density.calories * factor),
+          protein: round(density.protein * factor),
+          carbs: round(density.carbs * factor),
+          fat: round(density.fat * factor),
         };
       }),
     );
@@ -2165,4 +2216,17 @@ function normalizeTimePart(value: string, max: number) {
 
 function round(value: number) {
   return Math.round(value * 10) / 10;
+}
+
+// Recover a per-100g density from an item that has only absolute macros + grams. Used as
+// a one-time fallback when re-weighing an item that carries no stored `per100` (e.g. a
+// meal reloaded from the server); the result is then persisted so edits don't drift.
+function derivePer100(item: FoodItem): Macros {
+  const factor = item.grams > 0 ? 100 / item.grams : 0;
+  return {
+    calories: item.calories * factor,
+    protein: item.protein * factor,
+    carbs: item.carbs * factor,
+    fat: item.fat * factor,
+  };
 }

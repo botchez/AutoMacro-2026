@@ -172,3 +172,7 @@ class VisionOut(ApiModel):
     provider: str
     cached: bool = False
     debug: VisionDebug | None = None
+    # The model's estimate of the TOTAL food weight (grams). The client uses it as the
+    # portion when no scale is connected; a real scale reading overrides it. None on the
+    # barcode/filename-fallback paths.
+    estimatedGrams: float | None = None

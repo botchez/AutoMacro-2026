@@ -57,6 +57,10 @@ export type FoodItem = {
   grams: number;
   fdcId?: string | null;
   source?: string | null;
+  /** Per-100g macro density. When present, re-weighing recomputes macros from this
+   * (macros = per100 × grams / 100) instead of scaling the already-rounded macros, which
+   * compounds rounding badly across edits. */
+  per100?: Macros | null;
 } & Macros;
 
 export type MealEntry = {

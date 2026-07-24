@@ -72,12 +72,13 @@ class VisionCascade:
 
         # The cascade is synchronous (and may block on model/HTTP calls with retries),
         # so run it off the event loop.
-        items, provider, debug = await run_in_threadpool(
+        items, provider, debug, estimated_grams = await run_in_threadpool(
             self._run_cascade, image, filename, content_type
         )
         if not items:  # cascade produced nothing usable -> deterministic fallback
             items = self._filename_fallback(filename, digest)
             provider = "filename-fallback"
+            estimated_grams = None
             debug = {
                 "model": "filename-fallback",
                 "notes": [
@@ -86,7 +87,15 @@ class VisionCascade:
                 ],
             }
 
-        payload = {"items": items, "provider": provider, "cached": False, "debug": debug}
+        payload = {
+            "items": items,
+            "provider": provider,
+            "cached": False,
+            "debug": debug,
+            # The model's total-weight estimate — the client's portion fallback when no
+            # scale is connected. None on the barcode/fallback paths.
+            "estimatedGrams": estimated_grams,
+        }
         self.connection.execute(
             """
             INSERT OR REPLACE INTO vision_cache
@@ -215,28 +224,29 @@ class VisionCascade:
 
     def _run_cascade(
         self, image: bytes, filename: str, content_type: str | None
-    ) -> tuple[list[dict], str, dict | None]:
-        """Run identify() and flatten its components. Returns ([], "", None) on failure.
+    ) -> tuple[list[dict], str, dict | None, float | None]:
+        """Run identify() and flatten its components. Returns ([], "", None, None) on failure.
 
         The scale weight is deliberately NOT passed to identify() — the model is never
-        told the weight and the backend does no weight math. Each item carries only its
-        per-100g density + fraction (its share of the plate); the client multiplies by the
-        live scale weight. The third return value is a verbose debug block (model, raw
-        reply, step notes) for the frontend's debug panel."""
+        told the actual weight and the backend does no weight math. Each item carries only
+        its per-100g density + fraction (its share of the plate); the client multiplies by
+        the live scale weight. Returns (items, model, debug, estimated_grams) — the last is
+        the model's estimate of the total food weight, the client's fallback portion when
+        no scale is connected."""
         if not settings.openrouter_api_key:
-            return [], "", None  # no key -> caller uses the filename fallback
+            return [], "", None, None  # no key -> caller uses the filename fallback
         try:
             # Imported lazily so a missing optional dep (openai/pillow) degrades to the
             # fallback instead of breaking import of the whole service.
             from ..vision import identify
         except Exception:  # noqa: BLE001 - engine deps unavailable -> fallback
-            return [], "", None
+            return [], "", None, None
 
         mime = content_type or "image/jpeg"
         try:
             result = identify(image, grams=None, mime=mime, verbose=False)
         except Exception:  # noqa: BLE001 - model/network error -> fallback
-            return [], "", None
+            return [], "", None, None
 
         self._maybe_write_transcript(filename, result)
 
@@ -273,7 +283,8 @@ class VisionCascade:
                     "trace": component.get("trace", []),
                 }
             )
-        return items, result.model, self._build_debug(result)
+        estimated_grams = result.result.get("estimated_grams")
+        return items, result.model, self._build_debug(result), estimated_grams
 
     @staticmethod
     def _build_debug(result) -> dict:

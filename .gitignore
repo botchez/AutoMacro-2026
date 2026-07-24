@@ -24,10 +24,12 @@ data/
 *.sqlite-shm
 *.sqlite-wal
 *.sqlite-journal
-# The warm FDC cache is committed once; ignore local runtime rewrites of it.
-backend/vision/foodfacts_cache.sqlite
 __pycache__/
 *.py[cod]
+
+# Claude Code session logs & local memory — can contain secrets from the transcript;
+# never commit them.
+.claude-chats/
 
 # Editor directories and files
 .vscode/*

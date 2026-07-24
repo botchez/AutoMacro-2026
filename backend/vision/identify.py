@@ -112,10 +112,15 @@ Get those query strings right — that is the whole task. The "est_per_100g" you
 LAST-RESORT fallback used ONLY when the database has no match for your query, so never
 inflate your confidence in it; the lookup almost always wins over your own guess.
 
-You are NOT told the weight and you must NOT estimate portion size or grams — a scale
-handles that separately and the app does the weight math. Instead give each component a
-"fraction" of the total food weight (its share of the plate by mass); fractions MUST sum
-to 1.0 (a single item is just 1.0).
+You are NOT told the actual weight — a scale measures it separately and the app does the
+weight math against that. Give each component a "fraction" of the total food weight (its
+share of the plate by mass); fractions MUST sum to 1.0 (a single item is just 1.0).
+
+ALSO estimate "est_total_grams": the total weight, in grams, of ALL the food in the photo,
+from visual cues (plate/cup/utensil size, portion, packaging). This is a FALLBACK used
+ONLY when no scale is connected; when a scale is present its real reading overrides it, so
+a rough sensible estimate is fine (e.g. a mug of drink ~250, an apple ~180, a dinner plate
+~400). Never return 0.
 
 For each component:
 - "name": what it is.
@@ -148,6 +153,7 @@ Respond with ONLY this JSON, no prose, no code fences:
       "fraction": <0..1>, "est_per_100g": {{"kcal": <n>, "protein": <g>, "carbs": <g>, "fat": <g>}},
       "cooking_note": "<brief>"}}
   ],
+  "est_total_grams": <number>,
   "confidence": <0..1>,
   "notes": "<one short line>"
 }}"""
@@ -721,6 +727,15 @@ def identify(image_bytes: bytes, grams: float | None = None,
             pass
     if parsed.get("notes"):
         extra["notes"] = str(parsed["notes"]).strip()
+    # The model's estimate of the total food weight — used by the client as the fallback
+    # portion when no scale is connected (a real scale reading overrides it).
+    if parsed.get("est_total_grams") is not None:
+        try:
+            grams_est = round(float(parsed["est_total_grams"]), 1)
+            if grams_est > 0:
+                extra["estimated_grams"] = grams_est
+        except (TypeError, ValueError):
+            pass
 
     name = str(parsed.get("name") or components[0]["name"]).strip()
     result = _build_result(name, components, grams, events, extra)

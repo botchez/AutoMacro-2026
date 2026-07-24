@@ -58,6 +58,9 @@ export type VisionResponse = {
   provider: string;
   cached: boolean;
   debug?: VisionDebug | null;
+  /** The model's estimate of the total food weight (grams), used as the portion when no
+   * scale is connected. Null on the barcode/fallback paths. */
+  estimatedGrams?: number | null;
 };
 export type CoachRecommendation = {
   name: string;

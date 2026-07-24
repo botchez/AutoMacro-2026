@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 
 from openai import OpenAI
@@ -71,8 +72,9 @@ repeat a suggestion the user already acted on. Be supportive; never push \
 restriction, never shame, never treat "under" as an emergency. Prefer foods the \
 user actually eats. Always respect the dietary and allergies fields returned by \
 get_target; never suggest a food that conflicts with either. Keep it to 1-3 \
-sentences. Write in plain conversational text — \
-no markdown, bold, bullet lists, or headers (the UI shows your reply as raw text)."""
+sentences. Write in plain conversational text ONLY — no markdown of any kind: no bold \
+or italics (no * or _), no tables, no bullet or numbered lists, no headers, no code \
+formatting. Just plain sentences (the UI shows your reply as raw text)."""
 
 
 # The auto prompt above is tuned for the "user just logged a batch, coach them"
@@ -106,8 +108,9 @@ asked for detail). Never push restriction, never shame, never treat "under" as a
 emergency. Always respect the dietary and allergies fields returned by get_target; \
 never suggest a food that conflicts with either. If they ask something outside \
 nutrition, answer briefly and steer back. \
-Write in plain conversational text — no markdown, bold, bullet lists, or headers \
-(the chat UI shows your reply as raw text)."""
+Write in plain conversational text ONLY — no markdown of any kind: no bold or italics \
+(no * or _), no tables, no bullet or numbered lists, no headers, no code formatting. \
+Just plain sentences (the chat UI shows your reply as raw text)."""
 
 
 class CoachResult:
@@ -276,9 +279,10 @@ def run_coach(
             for t in tool_calls:
                 print(f"     call: {t['name']}({t['args'] or ''})")
 
-        # No tool calls -> this is the final answer.
+        # No tool calls -> this is the final answer. Strip any markdown the model added
+        # so the chat UI always shows pure text (no **bold**, tables, or list syntax).
         if not tool_calls:
-            text = (msg.content or "").strip()
+            text = _plain_text((msg.content or "").strip())
             events.append({"type": "final", "reasoning": reasoning, "text": text})
             return CoachResult(text, events, model, state.suggestions)
 
@@ -316,6 +320,45 @@ def run_coach(
     text = "(no final advice — hit iteration cap)"
     events.append({"type": "final", "reasoning": None, "text": text})
     return CoachResult(text, events, model, state.suggestions)
+
+
+# --- output sanitising -------------------------------------------------------
+
+def _plain_text(text: str) -> str:
+    """Force the agent's reply to pure prose. The prompt asks for no markdown, but models
+    don't always obey, so this strips any that slips through — bold/italics, tables,
+    headers, code, links, blockquotes, and list markers — so the chat UI never shows
+    formatting characters. Kept deliberately conservative: it removes markup, not words."""
+    if not text:
+        return text
+    s = text.replace("\r\n", "\n").replace("\r", "\n")
+    s = re.sub(r"```[^\n]*\n?", "", s)  # code fences -> keep inner text, drop the ``` lines
+
+    out: list[str] = []
+    for line in s.split("\n"):
+        stripped = line.strip()
+        # Drop markdown table separator rows like |---|:--:|---|.
+        if re.fullmatch(r"\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?", stripped):
+            continue
+        # Flatten a table row "| a | b |" into "a  b".
+        if "|" in line:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            line = "  ".join(c for c in cells if c)
+        out.append(line)
+    s = "\n".join(out)
+
+    s = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", s)     # headers  ### x -> x
+    s = re.sub(r"(?m)^\s{0,3}>\s?", "", s)          # blockquotes  > x -> x
+    s = re.sub(r"(?m)^\s*[-*+]\s+", "", s)          # bullet markers  - x -> x
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)          # **bold**
+    s = re.sub(r"__(.+?)__", r"\1", s)              # __bold__
+    s = re.sub(r"\*(.+?)\*", r"\1", s)              # *italic*
+    s = re.sub(r"(?<!\w)_(.+?)_(?!\w)", r"\1", s)   # _italic_ (not word_internal_)
+    s = re.sub(r"~~(.+?)~~", r"\1", s)              # ~~strike~~
+    s = re.sub(r"`([^`]+)`", r"\1", s)              # `code`
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)  # [text](url) -> text
+    s = re.sub(r"\n{3,}", "\n\n", s)                # collapse extra blank lines
+    return s.strip()
 
 
 # --- transcript rendering ----------------------------------------------------
