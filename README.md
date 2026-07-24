@@ -8,11 +8,19 @@ port, and same-origin `/api` calls.
 
 - SQLite-backed accounts, goals, meal logs, coach history, vision cache, and FDC
   cache in `data/nutricoach.sqlite3`
-- A vision cascade that checks its image cache, uses OpenAI vision when
-  configured, falls back safely, and enriches detected foods through USDA FoodData
-  Central or local reference data
-- A nutrition coach that uses the current user's goals and today's logs, with an
-  optional OpenAI stage and a deterministic rule-based fallback
+- A vision cascade (`backend/vision/`) that checks its image cache, decodes any
+  barcode (Open Food Facts), then makes one multimodal call that classifies the
+  frame and decomposes a plate into components — each priced from the most
+  authoritative source available (label OCR, Open Food Facts name search, USDA
+  FoodData Central, or a flagged model estimate) — with a deterministic filename
+  fallback when no model key is set
+- A nutrition coach (`backend/coach/`) that is a real tool-calling agent: it reads
+  today's totals vs target (with a tolerance band), the just-submitted batch, the
+  user's eating history, the time of day, and its own last suggestion before
+  advising, with a deterministic rule-based fallback
+- Both model stages run through a single OpenRouter key (the vision cascade and the
+  coach agent), so the app degrades gracefully to its deterministic paths with no
+  key at all
 - Atomic meal and item writes
 - A client-only Vite + React + Tailwind + shadcn UI
 - FastAPI static hosting with SPA fallback
@@ -45,8 +53,9 @@ Open `http://localhost:8000`. API documentation is at `/api/docs`.
 The seeded demo login is `demo@nutricoach.app` / `demo1234`.
 
 Copy `.env.example` to `.env` or set environment variables in your runtime.
-`OPENAI_API_KEY` and `USDA_FDC_API_KEY` are optional; the app remains usable
-without them.
+`OPENROUTER_API_KEY` enables both model stages; `USDA_FDC_API_KEY` (aka
+`FDC_API_KEY`) adds authoritative macros for generic ingredients. All are optional —
+the app remains usable without them via its deterministic fallbacks.
 
 ## Test
 

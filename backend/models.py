@@ -64,7 +64,9 @@ class CoachMessageIn(ApiModel):
 
 class CoachOut(ApiModel):
     message: str
-    source: Literal["openai", "rules"]
+    # "coach-agent" when the tool-calling agent produced the reply, "rules" for the
+    # deterministic fallback. Kept a free string so the engine can label its source.
+    source: str
 
 
 class VisionFood(ApiModel):
