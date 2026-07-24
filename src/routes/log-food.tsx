@@ -23,8 +23,8 @@ import {
   Wheat,
   X,
 } from "lucide-react";
+import logFoodCoach from "@/assets/latspread.png";
 import { AppLayout } from "@/components/AppLayout";
-import { Mascot } from "@/components/Mascot";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -474,7 +474,11 @@ function LogFood() {
     <AppLayout>
       <div className="space-y-5">
         <header className="flex items-center gap-4">
-          <Mascot size={64} className="animate-float shrink-0" />
+          <img
+            src={logFoodCoach}
+            alt="NutriCoach ready to help log food"
+            className="h-20 w-16 shrink-0 object-contain object-bottom"
+          />
           <div>
             <div className="text-sm font-semibold text-primary">Log food</div>
             <h1 className="text-2xl font-black md:text-3xl">Your food timeline</h1>
@@ -575,7 +579,7 @@ function LogFood() {
       </div>
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-        <DialogContent className="flex h-[92vh] max-h-[860px] w-[calc(100%-1rem)] flex-col overflow-hidden rounded-3xl p-0 sm:max-w-5xl">
+        <DialogContent className="flex h-[92vh] max-h-[860px] w-[calc(100%-1rem)] flex-col overflow-hidden rounded-3xl p-0 sm:max-w-[96vw] 2xl:max-w-7xl">
           <DialogHeader className="shrink-0 border-b px-5 py-4 text-left">
             <DialogTitle className="flex items-center gap-2 text-xl">
               <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">
@@ -588,8 +592,8 @@ function LogFood() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid min-h-0 flex-1 grid-rows-[minmax(280px,42%)_minmax(0,1fr)] lg:grid-cols-[1.1fr_0.9fr] lg:grid-rows-1">
-            <div className="flex min-h-0 flex-col overflow-hidden border-b lg:border-b-0 lg:border-r">
+          <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1.05fr)_minmax(300px,0.85fr)_minmax(300px,0.72fr)] lg:grid-rows-1 lg:overflow-hidden">
+            <div className="flex min-h-80 flex-col overflow-hidden border-b lg:min-h-0 lg:border-b-0 lg:border-r">
               <div className="flex shrink-0 items-center justify-between px-5 py-3">
                 <div>
                   <h3 className="flex items-center gap-2 font-black">
@@ -705,7 +709,7 @@ function LogFood() {
               </div>
             </div>
 
-            <div className="min-h-0 space-y-4 overflow-y-auto p-5">
+            <div className="space-y-4 p-5 lg:min-h-0 lg:overflow-y-auto">
               <section className="rounded-2xl bg-gradient-to-br from-sky/10 to-primary/10 p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -860,39 +864,46 @@ function LogFood() {
                   ))}
                 </div>
               </section>
+            </div>
 
-              <section className="rounded-2xl border bg-primary/5 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
-                      Review meal
-                    </div>
-                    <h3 className="mt-0.5 text-lg font-black">
-                      {mealItems.length} item{mealItems.length === 1 ? "" : "s"} selected
-                    </h3>
+            <aside className="flex min-h-96 flex-col border-t bg-primary/5 p-5 lg:min-h-0 lg:border-l lg:border-t-0">
+              <div className="flex shrink-0 items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
+                    Review meal
                   </div>
-                  <span className="rounded-full bg-white px-3 py-1 text-xs font-extrabold shadow-sm">
-                    {Math.round(mealTotals.calories)} kcal
-                  </span>
+                  <h3 className="mt-0.5 text-lg font-black">
+                    {mealItems.length} item{mealItems.length === 1 ? "" : "s"} selected
+                  </h3>
                 </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-extrabold shadow-sm">
+                  {Math.round(mealTotals.calories)} kcal
+                </span>
+              </div>
 
-                <div className="mt-3 max-h-52 overflow-y-auto pr-1">
-                  {mealItems.length ? (
-                    <FoodRows
-                      items={mealItems}
-                      onResize={(id, grams) => resizeItem(mealItems, setMealItems, id, grams)}
-                      onRemove={(id) =>
-                        setMealItems((current) => current.filter((item) => item.id !== id))
-                      }
-                    />
-                  ) : (
-                    <div className="rounded-xl border border-dashed bg-white/60 p-4 text-center text-xs text-muted-foreground">
-                      Scan your plate or choose a food above to review it here.
+              <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+                {mealItems.length ? (
+                  <FoodRows
+                    items={mealItems}
+                    onResize={(id, grams) => resizeItem(mealItems, setMealItems, id, grams)}
+                    onRemove={(id) =>
+                      setMealItems((current) => current.filter((item) => item.id !== id))
+                    }
+                  />
+                ) : (
+                  <div className="flex h-full min-h-40 items-center justify-center rounded-2xl border border-dashed bg-white/60 p-5 text-center">
+                    <div>
+                      <Utensils className="mx-auto h-7 w-7 text-muted-foreground/40" />
+                      <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                        Scan your plate or choose a food from the middle column to review it here.
+                      </p>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
+              </div>
 
-                <div className="mt-3 grid grid-cols-4 gap-2">
+              <div className="mt-4 shrink-0">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-2">
                   <ConfirmMacro label="Calories" value={mealTotals.calories} />
                   <ConfirmMacro label="Protein" value={mealTotals.protein} />
                   <ConfirmMacro label="Carbs" value={mealTotals.carbs} />
@@ -916,20 +927,20 @@ function LogFood() {
                     </>
                   ) : (
                     <>
-                      <Check className="mr-2 h-4 w-4" /> Review complete · Confirm and save
+                      <Check className="mr-2 h-4 w-4" /> Confirm and save
                     </>
                   )}
                 </Button>
-              </section>
 
-              <Button
-                onClick={() => setEditorOpen(false)}
-                variant="ghost"
-                className="w-full rounded-xl font-bold"
-              >
-                Close and keep editing later
-              </Button>
-            </div>
+                <Button
+                  onClick={() => setEditorOpen(false)}
+                  variant="ghost"
+                  className="mt-2 w-full rounded-xl font-bold"
+                >
+                  Close and keep editing later
+                </Button>
+              </div>
+            </aside>
           </div>
         </DialogContent>
       </Dialog>
