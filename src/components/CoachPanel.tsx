@@ -1,17 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  Bot,
-  CheckCircle2,
-  FlaskConical,
-  Loader2,
-  Plus,
-  Send,
-  Sparkles,
-  Utensils,
-} from "lucide-react";
+import { CheckCircle2, FlaskConical, Loader2, Plus, Send, Sparkles, Utensils } from "lucide-react";
+import coachHero from "@/assets/bicepsflex.png";
 import { api, type CoachMessage, type CoachRecommendation } from "@/lib/api";
-import { Mascot } from "./Mascot";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
@@ -122,8 +113,12 @@ export function CoachPanel() {
       <div className="relative grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
           <div className="flex items-center gap-4">
-            <div className="grid h-20 w-20 shrink-0 place-items-center rounded-3xl bg-white shadow-sm">
-              <Mascot size={68} className="animate-float" />
+            <div className="flex h-24 w-24 shrink-0 items-end justify-center">
+              <img
+                src={coachHero}
+                alt="NutriCoach flexing"
+                className="h-24 w-24 object-contain object-bottom"
+              />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.16em] text-primary">
@@ -183,8 +178,8 @@ export function CoachPanel() {
                   }
                 >
                   {item.role === "assistant" && (
-                    <div className="mb-1 flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider text-primary">
-                      <Bot className="h-3 w-3" /> Coach
+                    <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-primary">
+                      Coach
                     </div>
                   )}
                   {item.content}

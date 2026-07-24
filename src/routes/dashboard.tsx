@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo } from "react";
+import femaleEating from "@/assets/femaleeating.png";
 import { AppLayout } from "@/components/AppLayout";
 import { MacroRing } from "@/components/MacroRing";
 import { CoachPanel } from "@/components/CoachPanel";
@@ -49,9 +50,7 @@ function Dashboard() {
         <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
           <div className="min-w-0">
             <div className="text-sm text-muted-foreground">Today</div>
-            <h1 className="truncate text-2xl md:text-3xl">
-              Hi {user?.name ?? "friend"} <span className="inline-block animate-wiggle">👋</span>
-            </h1>
+            <h1 className="truncate text-2xl md:text-3xl">Hi {user?.name ?? "friend"}</h1>
           </div>
           <Button asChild size="lg" className="rounded-full font-bold bounce-tap shrink-0">
             <Link to="/log-food">
@@ -156,7 +155,11 @@ function Dashboard() {
               </ul>
             ) : (
               <div className="text-center py-6">
-                <div className="text-4xl">🍽️</div>
+                <img
+                  src={femaleEating}
+                  alt="Woman enjoying a healthy meal"
+                  className="mx-auto h-32 w-32 object-contain"
+                />
                 <div className="mt-2 font-bold">No meals yet today</div>
                 <div className="text-sm text-muted-foreground">
                   Tap "Log food" to add your first!
