@@ -154,10 +154,10 @@ export function CoachPanel() {
   }, [mealsLogged]);
 
   return (
-    <section className="relative overflow-hidden rounded-[2rem] border border-primary/20 bg-gradient-to-br from-primary/15 via-white to-sun/15 p-5 shadow-lg shadow-primary/5 md:p-7">
+    <section className="relative overflow-hidden rounded-[2rem] border border-primary/20 bg-gradient-to-br from-primary/15 via-white to-sun/15 dark:from-primary/20 dark:via-slate-900/95 dark:to-emerald-950/40 dark:border-slate-800 p-5 shadow-lg shadow-primary/5 dark:shadow-black/50 md:p-7 transition-colors">
       <div
         aria-hidden="true"
-        className="absolute -right-16 -top-16 h-52 w-52 rounded-full bg-sky/20 blur-3xl"
+        className="absolute -right-16 -top-16 h-52 w-52 rounded-full bg-sky/20 dark:bg-emerald-500/10 blur-3xl pointer-events-none"
       />
       <div className="relative grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
@@ -170,10 +170,10 @@ export function CoachPanel() {
               />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.16em] text-primary">
+              <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[0.16em] text-primary dark:text-emerald-400">
                 <Sparkles className="h-4 w-4" /> AI nutrition coach
               </div>
-              <h2 className="mt-1 text-2xl font-black">Ask your coach</h2>
+              <h2 className="mt-1 text-2xl font-black text-foreground">Ask your coach</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 Your conversation is saved and updates with every meal.
               </p>
@@ -184,12 +184,12 @@ export function CoachPanel() {
               size="sm"
               disabled={loading}
               onClick={() => void runBatchCheck()}
-              className="shrink-0 rounded-full bg-white px-3 font-bold"
+              className="shrink-0 rounded-full bg-white dark:bg-slate-800/90 dark:text-slate-100 dark:border-slate-700 dark:hover:bg-slate-700 px-3 font-bold shadow-sm"
             >
               {testStatus === "running" ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : testStatus === "passed" ? (
-                <CheckCircle2 className="mr-2 h-4 w-4 text-primary" />
+                <CheckCircle2 className="mr-2 h-4 w-4 text-primary dark:text-emerald-400" />
               ) : (
                 <FlaskConical className="mr-2 h-4 w-4" />
               )}
@@ -207,7 +207,7 @@ export function CoachPanel() {
           <div
             ref={threadRef}
             aria-live="polite"
-            className="mt-5 h-64 space-y-3 overflow-y-auto rounded-2xl border border-white bg-white/80 p-4 pr-2 shadow-sm"
+            className="mt-5 h-64 space-y-3 overflow-y-auto rounded-2xl border border-white/80 bg-white/80 dark:border-slate-800 dark:bg-slate-950/85 p-4 pr-2 shadow-inner transition-colors"
           >
             {messages.map((item, index) => (
               <div
@@ -217,13 +217,13 @@ export function CoachPanel() {
                 <div
                   className={
                     item.role === "user"
-                      ? "max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm font-semibold leading-5 text-primary-foreground"
-                      : "max-w-[88%] rounded-2xl rounded-bl-md bg-muted px-4 py-2.5 text-sm font-semibold leading-5"
+                      ? "max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm font-semibold leading-5 text-primary-foreground shadow-sm"
+                      : "max-w-[88%] rounded-2xl rounded-bl-md bg-muted dark:bg-slate-800/90 dark:border dark:border-slate-700/60 dark:text-slate-100 px-4 py-2.5 text-sm font-semibold leading-5 shadow-sm"
                   }
                 >
                   {item.role === "assistant" && (
-                    <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-primary">
-                      Coach
+                    <div className="mb-1 text-[10px] font-extrabold uppercase tracking-wider text-primary dark:text-emerald-400 flex items-center gap-1">
+                      <Sparkles className="h-3 w-3 inline" /> Coach
                     </div>
                   )}
                   {item.content}
@@ -232,8 +232,8 @@ export function CoachPanel() {
             ))}
             {loading && (
               <div className="flex justify-start">
-                <div className="flex items-center gap-2 rounded-2xl rounded-bl-md bg-muted px-4 py-3 text-xs font-bold text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" /> Thinking about today’s
+                <div className="flex items-center gap-2 rounded-2xl rounded-bl-md bg-muted dark:bg-slate-800/90 dark:border dark:border-slate-700/60 px-4 py-3 text-xs font-bold text-muted-foreground dark:text-slate-300">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary dark:text-emerald-400" /> Thinking about today’s
                   log…
                 </div>
               </div>
@@ -246,7 +246,7 @@ export function CoachPanel() {
                 key={prompt}
                 onClick={() => void ask(prompt)}
                 disabled={loading}
-                className="rounded-full border bg-white/70 px-3 py-1.5 text-xs font-bold text-foreground/75 transition-colors hover:border-primary/30 hover:text-primary disabled:opacity-50"
+                className="rounded-full border bg-white/70 dark:bg-slate-800/70 dark:border-slate-700 dark:text-slate-200 dark:hover:border-primary/50 dark:hover:text-primary px-3 py-1.5 text-xs font-bold text-foreground/75 transition-colors hover:border-primary/30 hover:text-primary disabled:opacity-50"
               >
                 {prompt}
               </button>
@@ -265,12 +265,12 @@ export function CoachPanel() {
               onChange={(event) => setMessage(event.target.value)}
               placeholder="Ask your coach what to eat…"
               aria-label="Message your nutrition coach"
-              className="h-11 rounded-xl bg-white"
+              className="h-11 rounded-xl bg-white dark:bg-slate-900 dark:border-slate-700 dark:text-slate-100 dark:placeholder:text-slate-500 focus-visible:dark:ring-primary"
             />
             <Button
               type="submit"
               disabled={loading || !message.trim()}
-              className="h-11 rounded-xl px-4"
+              className="h-11 rounded-xl px-4 font-bold"
               aria-label="Send message"
             >
               <Send className="h-4 w-4" />
@@ -278,13 +278,13 @@ export function CoachPanel() {
           </form>
         </div>
 
-        <aside className="rounded-2xl border bg-white/85 p-5 shadow-sm">
+        <aside className="rounded-2xl border bg-white/85 dark:bg-slate-900/85 dark:border-slate-800 p-5 shadow-sm transition-colors">
           <div className="flex items-center gap-2">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-sun/20 text-amber-700">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-sun/20 dark:bg-sun/15 text-amber-700 dark:text-amber-400">
               <Utensils className="h-4 w-4" />
             </span>
             <div>
-              <div className="text-xs font-extrabold uppercase tracking-[0.14em] text-primary">
+              <div className="text-xs font-extrabold uppercase tracking-[0.14em] text-primary dark:text-emerald-400">
                 Recommended foods
               </div>
               <p className="max-w-44 truncate text-[11px] text-muted-foreground">
@@ -296,10 +296,10 @@ export function CoachPanel() {
           <div className="mt-4 space-y-2">
             {recommendations.length ? (
               recommendations.map((food) => (
-                <div key={food.name} className="rounded-xl border bg-background p-3">
+                <div key={food.name} className="rounded-xl border bg-background dark:bg-slate-800/60 dark:border-slate-700/60 p-3 transition-colors">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="text-sm font-extrabold leading-tight">{food.name}</div>
-                    <span className="shrink-0 rounded-full bg-primary/8 px-2 py-0.5 text-[10px] font-bold text-primary">
+                    <div className="text-sm font-extrabold leading-tight text-foreground">{food.name}</div>
+                    <span className="shrink-0 rounded-full bg-primary/10 dark:bg-primary/20 px-2 py-0.5 text-[10px] font-bold text-primary dark:text-emerald-400">
                       {food.serving}
                     </span>
                   </div>
@@ -310,7 +310,7 @@ export function CoachPanel() {
                     asChild
                     size="sm"
                     variant="outline"
-                    className="mt-2.5 h-8 w-full rounded-lg text-xs font-bold"
+                    className="mt-2.5 h-8 w-full rounded-lg text-xs font-bold dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 dark:text-slate-100"
                   >
                     <Link to="/log-food">
                       <Plus className="mr-1.5 h-3.5 w-3.5" /> Add
@@ -319,7 +319,7 @@ export function CoachPanel() {
                 </div>
               ))
             ) : (
-              <div className="rounded-xl border border-dashed p-5 text-center text-xs text-muted-foreground">
+              <div className="rounded-xl border border-dashed dark:border-slate-800 p-5 text-center text-xs text-muted-foreground">
                 Log a meal or ask your coach for ideas — its food suggestions show up here.
               </div>
             )}

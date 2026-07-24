@@ -22,6 +22,22 @@ export type Goals = Macros & {
   units: "metric" | "imperial";
 };
 
+export type ThemeMode = "light" | "dark" | "system";
+
+export function applyTheme(theme: ThemeMode) {
+  if (typeof window === "undefined") return;
+  const root = document.documentElement;
+  const isDark =
+    theme === "dark" ||
+    (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+  if (isDark) {
+    root.classList.add("dark");
+  } else {
+    root.classList.remove("dark");
+  }
+}
+
 export type UserSettings = Goals & {
   name: string;
   email: string;
@@ -32,6 +48,7 @@ export type UserSettings = Goals & {
   activity: "low" | "light" | "moderate" | "high";
   allergies: string;
   weekStartsOn: "monday" | "sunday";
+  theme?: ThemeMode;
 };
 
 export type FoodItem = {
@@ -65,6 +82,8 @@ type State = {
 type Ctx = State & {
   ready: boolean;
   busy: boolean;
+  theme: ThemeMode;
+  setTheme: (theme: ThemeMode) => void;
   // Bumps once per successfully saved batch. The CoachPanel watches it and runs the
   // same coach check the "Test coach" button runs, so logging food auto-pings the coach.
   mealsLogged: number;
@@ -89,6 +108,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [mealsLogged, setMealsLogged] = useState(0);
+  const [theme, setThemeState] = useState<ThemeMode>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("nutricoach:theme") as ThemeMode | null;
+      if (saved && ["light", "dark", "system"].includes(saved)) return saved;
+    }
+    return "light";
+  });
+
+  const setTheme = useCallback((newTheme: ThemeMode) => {
+    setThemeState(newTheme);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("nutricoach:theme", newTheme);
+      applyTheme(newTheme);
+    }
+  }, []);
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   const refresh = useCallback(async () => {
     if (!api.hasSession()) {
@@ -227,6 +265,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ...state,
       ready,
       busy,
+      theme,
+      setTheme,
       mealsLogged,
       login,
       signup,
@@ -244,6 +284,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       state,
       ready,
       busy,
+      theme,
+      setTheme,
       mealsLogged,
       login,
       signup,

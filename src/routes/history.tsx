@@ -297,7 +297,7 @@ function HistoryPage() {
           <TabsList className="grid w-full grid-cols-2 rounded-2xl bg-muted/60 p-1.5 h-auto">
             <TabsTrigger
               value="daily"
-              className="rounded-xl py-2.5 text-xs md:text-sm font-extrabold gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm"
+              className="rounded-xl py-2.5 text-xs md:text-sm font-extrabold gap-2 data-[state=active]:bg-card data-[state=active]:text-card-foreground data-[state=active]:shadow-sm"
             >
               <CalendarDays className="h-4 w-4 text-primary" />
               <span>Daily Log</span>
@@ -307,7 +307,7 @@ function HistoryPage() {
             </TabsTrigger>
             <TabsTrigger
               value="search"
-              className="rounded-xl py-2.5 text-xs md:text-sm font-extrabold gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm"
+              className="rounded-xl py-2.5 text-xs md:text-sm font-extrabold gap-2 data-[state=active]:bg-card data-[state=active]:text-card-foreground data-[state=active]:shadow-sm"
             >
               <Search className="h-4 w-4 text-blue-500" />
               <span>Food History</span>
@@ -600,7 +600,7 @@ function HistoryPage() {
                                     saving={saving}
                                   />
                                 ) : (
-                                  <div className="rounded-2xl border bg-white p-4 space-y-3 shadow-xs">
+                                  <div className="rounded-2xl border bg-card p-4 space-y-3 shadow-xs">
                                     <div className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
                                       Food Items Logged
                                     </div>
@@ -739,7 +739,7 @@ function HistoryPage() {
                       className={cn(
                         "px-3 py-1.5 text-xs font-bold rounded-lg whitespace-nowrap transition-colors",
                         searchFilter === f.id
-                          ? "bg-white text-foreground shadow-xs"
+                          ? "bg-card text-foreground shadow-xs"
                           : "text-muted-foreground hover:text-foreground",
                       )}
                     >
@@ -747,7 +747,7 @@ function HistoryPage() {
                     </button>
                   ))}
                 </div>
-                <label className="relative flex h-10 items-center rounded-xl border bg-white pl-9 pr-2">
+                <label className="relative flex h-10 items-center rounded-xl border bg-card dark:bg-slate-900 pl-9 pr-2">
                   <ArrowUpDown className="absolute left-3 h-4 w-4 text-muted-foreground" />
                   <span className="sr-only">Sort food history</span>
                   <select
@@ -757,13 +757,13 @@ function HistoryPage() {
                         event.target.value as "newest" | "oldest" | "calories" | "protein",
                       )
                     }
-                    className="h-full w-full appearance-none bg-transparent text-xs font-bold outline-none"
+                    className="h-full w-full appearance-none bg-transparent text-xs font-bold outline-none dark:text-slate-100"
                     aria-label="Sort food history"
                   >
-                    <option value="newest">Newest first</option>
-                    <option value="oldest">Oldest first</option>
-                    <option value="calories">Highest calories</option>
-                    <option value="protein">Highest protein</option>
+                    <option value="newest" className="bg-card dark:bg-slate-900 dark:text-slate-100">Newest first</option>
+                    <option value="oldest" className="bg-card dark:bg-slate-900 dark:text-slate-100">Oldest first</option>
+                    <option value="calories" className="bg-card dark:bg-slate-900 dark:text-slate-100">Highest calories</option>
+                    <option value="protein" className="bg-card dark:bg-slate-900 dark:text-slate-100">Highest protein</option>
                   </select>
                   <ChevronDown className="pointer-events-none h-3.5 w-3.5 text-muted-foreground" />
                 </label>
@@ -779,7 +779,7 @@ function HistoryPage() {
                       key={food.name}
                       type="button"
                       onClick={() => setSearchQuery(food.name)}
-                      className="rounded-full border bg-white px-3 py-1 text-xs font-bold transition-colors hover:border-primary/30 hover:text-primary"
+                      className="rounded-full border bg-card dark:bg-slate-800 px-3 py-1 text-xs font-bold transition-colors hover:border-primary/30 hover:text-primary"
                     >
                       {food.name} <span className="text-muted-foreground">{food.count}×</span>
                     </button>
@@ -806,7 +806,7 @@ function HistoryPage() {
                 </div>
 
                 {filteredFoodHistory.length > 0 ? (
-                  <div className="divide-y border rounded-2xl overflow-hidden bg-white">
+                  <div className="divide-y border rounded-2xl overflow-hidden bg-card">
                     {filteredFoodHistory.map((item, idx) => (
                       <div
                         key={`${item.date}-${item.mealId}-${item.food.id}-${idx}`}
@@ -1030,7 +1030,7 @@ function MealEditor({
   };
 
   return (
-    <div className="rounded-2xl border border-primary/20 bg-white p-4 space-y-4 shadow-xs">
+    <div className="rounded-2xl border border-primary/20 bg-card p-4 space-y-4 shadow-xs">
       <div className="flex items-center justify-between border-b pb-3">
         <div className="text-sm font-extrabold text-primary flex items-center gap-2">
           <Clock className="h-4 w-4" /> Edit Meal Details
