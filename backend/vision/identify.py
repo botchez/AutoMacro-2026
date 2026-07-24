@@ -64,6 +64,13 @@ VISION_REASONING_MAX_TOKENS = int(os.getenv("VISION_REASONING_MAX_TOKENS", "1024
 VISION_MAX_EDGE = int(os.getenv("VISION_MAX_EDGE", "1024"))
 VISION_JPEG_QUALITY = int(os.getenv("VISION_JPEG_QUALITY", "85"))
 
+# OpenRouter provider routing. A model like gemma-4-31b-it is served by several upstream
+# providers; by default OpenRouter load-balances by price. Sorting by "throughput" pins
+# each call to the fastest provider instead (same model, just the quickest host). Set
+# VISION_PROVIDER_SORT="" to fall back to OpenRouter's default price routing.
+# See https://openrouter.ai/docs/features/provider-routing
+VISION_PROVIDER_SORT = os.getenv("VISION_PROVIDER_SORT", "throughput")
+
 MACROS = ("kcal", "protein", "carbs", "fat")
 
 OFF_TIMEOUT_S = 6
@@ -360,6 +367,10 @@ def _coerce_per_100g(obj: dict | None) -> dict:
 def _create(client: OpenAI, model: str, image_bytes: bytes, mime: str, prompt: str):
     reasoning = ({"enabled": True, "max_tokens": VISION_REASONING_MAX_TOKENS}
                  if VISION_REASONING else {"enabled": False})
+    extra_body = {"reasoning": reasoning}
+    # Route to the fastest upstream provider for this model (same weights, quickest host).
+    if VISION_PROVIDER_SORT:
+        extra_body["provider"] = {"sort": VISION_PROVIDER_SORT}
     resp = client.chat.completions.create(
         model=model,
         messages=[
@@ -374,7 +385,7 @@ def _create(client: OpenAI, model: str, image_bytes: bytes, mime: str, prompt: s
         ],
         temperature=0.1,
         max_tokens=VISION_MAX_TOKENS,
-        extra_body={"reasoning": reasoning},
+        extra_body=extra_body,
     )
     if not resp.choices:
         detail = None

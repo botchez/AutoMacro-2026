@@ -89,6 +89,14 @@ CREATE TABLE IF NOT EXISTS coach_messages (
 
 CREATE INDEX IF NOT EXISTS coach_messages_user_idx
 ON coach_messages(user_id, created_at DESC);
+
+-- The coach's current food suggestions for the sidebar (one row per user, replaced
+-- each coach run). Empty/missing means the sidebar shows nothing.
+CREATE TABLE IF NOT EXISTS coach_suggestions (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    items TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

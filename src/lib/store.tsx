@@ -52,6 +52,9 @@ type State = {
 type Ctx = State & {
   ready: boolean;
   busy: boolean;
+  // Bumps once per successfully saved batch. The CoachPanel watches it and runs the
+  // same coach check the "Test coach" button runs, so logging food auto-pings the coach.
+  mealsLogged: number;
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -70,6 +73,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(emptyState);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [mealsLogged, setMealsLogged] = useState(0);
 
   const refresh = useCallback(async () => {
     if (!api.hasSession()) {
@@ -131,6 +135,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logs.sort((a, b) => (a.date < b.date ? 1 : -1));
       return { ...current, logs };
     });
+    // Every logged batch auto-triggers the coach: coachTip() runs the agent in "auto"
+    // mode over the just-submitted batch and persists its advice, so the dashboard
+    // shows fresh coaching next time it loads. Fire-and-forget — never block the save.
+    void api.coachTip().catch(() => {});
+    // Signal any mounted CoachPanel to run its coach check live (see mealsLogged).
+    setMealsLogged((count) => count + 1);
   }, []);
 
   const updateMeal = useCallback(async (date: string, meal: MealEntry) => {
@@ -174,6 +184,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ...state,
       ready,
       busy,
+      mealsLogged,
       login,
       signup,
       logout,
@@ -188,6 +199,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       state,
       ready,
       busy,
+      mealsLogged,
       login,
       signup,
       logout,

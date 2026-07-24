@@ -103,6 +103,16 @@ export const api = {
       body: form,
     });
   },
+  scanBarcodeFrame: (frame: Blob, weight?: number) => {
+    const form = new FormData();
+    form.append("image", frame, "frame.jpg");
+    if (weight && weight > 0) form.append("weight", String(weight));
+    return request<{
+      status: "none" | "unmatched" | "matched";
+      barcode: string | null;
+      result: VisionResponse | null;
+    }>("/api/vision/barcode/scan", { method: "POST", body: form });
+  },
   coachTip: () => request<CoachResponse>("/api/coach/tip"),
   coachHistory: () =>
     request<{ messages?: CoachMessage[]; recommendations?: CoachRecommendation[] }>(

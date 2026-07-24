@@ -5,9 +5,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from .config import settings
 from .db import connect, initialize_database, transaction, utc_now
@@ -29,7 +30,7 @@ from .security import (
     token_digest,
     verify_password,
 )
-from .services.coach import CoachService
+from .services.coach import CoachService, CoachUnavailableError
 from .services.vision import VisionCascade
 
 
@@ -46,6 +47,13 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(CoachUnavailableError)
+async def _coach_unavailable_handler(_: Request, exc: CoachUnavailableError) -> JSONResponse:
+    # Fail loud: the coach couldn't reach/parse the agent. 502 + the real reason so it's
+    # obvious in the UI and logs rather than masked by a canned reply.
+    return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={"detail": str(exc)})
 
 
 def db_connection():
@@ -366,6 +374,33 @@ async def analyze_vision(
             image.content_type,
             weight,
         )
+
+
+@app.post("/api/vision/barcode/scan")
+async def scan_barcode_frame(
+    image: UploadFile = File(...),
+    weight: float | None = Form(default=None),
+    _: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    """Decode a barcode out of a single live-camera frame and price it off Open Food
+    Facts. Polled by the client while the camera is on, so it stays quiet: 200 with a
+    `status` discriminator (none / unmatched / matched) rather than 404s every tick.
+    """
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Image is empty")
+    if len(image_bytes) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image must be 12 MB or smaller")
+    cascade = VisionCascade(connection)
+    code = await run_in_threadpool(cascade.decode_barcode, image_bytes)
+    if not code:
+        return {"status": "none", "barcode": None, "result": None}
+    with connection:
+        result = await cascade.lookup_barcode(code, weight)
+    if result is None:
+        return {"status": "unmatched", "barcode": code, "result": None}
+    return {"status": "matched", "barcode": code, "result": result}
 
 
 @app.get("/api/coach/tip", response_model=CoachOut)

@@ -76,7 +76,9 @@ class CoachMessageOut(ApiModel):
 
 class CoachOut(ApiModel):
     message: str
-    source: Literal["openai", "rules"]
+    # Free string: the coach agent labels replies "coach-agent"; the deterministic
+    # fallback uses "rules".
+    source: str
     recommendations: list[CoachRecommendation]
 
 

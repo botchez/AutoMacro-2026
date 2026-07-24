@@ -66,6 +66,23 @@ export const Route = createFileRoute("/log-food")({
 const uid = () => Math.random().toString(36).slice(2, 10);
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 
+// Grab a JPEG frame from the live <video> for the server-side barcode scanner. 1024px
+// on the long edge at q0.85 keeps the bars crisp enough that pyzbar decodes on the
+// first clean look (blurry/tiny frames are the main reason a scan needs several tries);
+// it's still small to upload on localhost. Returns null until the video has pixels.
+async function grabFrame(video: HTMLVideoElement, maxEdge = 1024): Promise<Blob | null> {
+  const { videoWidth: w, videoHeight: h } = video;
+  if (!w || !h) return null;
+  const scale = Math.min(1, maxEdge / Math.max(w, h));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+}
+
 function LogFood() {
   const { user, goals, addMeal, updateMeal, deleteMeal, logs, ready } = useApp();
   const navigate = useNavigate();
@@ -89,6 +106,11 @@ function LogFood() {
   const [cameraStarting, setCameraStarting] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Live barcode auto-scan bookkeeping. `last` de-dupes repeat toasts for an unmatched
+  // code; `weight` lets the scan loop (which only re-subscribes on cameraOn) read fresh
+  // grams without restarting.
+  const lastBarcodeRef = useRef<string | null>(null);
+  const weightRef = useRef(0);
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [mealItems, setMealItems] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
@@ -204,6 +226,8 @@ function LogFood() {
   // freezes a reading (>0) for the analysis call.
   const liveWeight = Math.max(0, (scale.connected ? (scale.weight ?? 0) : mockWeight) - tareOffset);
   const displayedWeight = capturedWeight > 0 ? capturedWeight : liveWeight;
+  // Keep the barcode scan loop (subscribed only on cameraOn) reading the latest weight.
+  weightRef.current = displayedWeight;
   const selectedDay = logs.find((day) => day.date === selectedDate);
   const mealTotals = useMemo(
     () => sumMacros([{ id: "draft", time: mealTime, items: mealItems }]),
@@ -310,6 +334,8 @@ function LogFood() {
     setImagePreview(URL.createObjectURL(file));
     setScanning(true);
     try {
+      // The server cascade decodes any barcode in the frame (pyzbar) before the model,
+      // so a captured/uploaded barcode photo already resolves to the exact product.
       const result = await api.analyze(file, capturedWeight || displayedWeight);
       const items = result.items.map((item) => ({ ...item, id: uid() }));
       setDetected(items);
@@ -324,6 +350,60 @@ function LogFood() {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
+
+  // While the camera is live, continuously scan for a barcode: grab a frame, POST it to
+  // the pyzbar decode endpoint, and fire the NEXT frame the moment that one returns (a
+  // self-scheduling loop, not a fixed timer) so the effective rate is capped only by the
+  // round-trip — snappy on localhost. The instant a barcode resolves to a product we
+  // stop the camera and load it, no capture press. Works everywhere (server-side decode).
+  useEffect(() => {
+    if (!cameraOn) return;
+    lastBarcodeRef.current = null;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const scanOnce = async () => {
+      if (cancelled) return;
+      const video = videoRef.current;
+      if (video && video.videoWidth) {
+        try {
+          const frame = await grabFrame(video);
+          if (!cancelled && frame) {
+            const res = await api.scanBarcodeFrame(frame, weightRef.current);
+            if (cancelled) return;
+            if (res.status === "matched" && res.result) {
+              stopCamera(); // flips cameraOn -> this effect's cleanup halts the loop
+              const items = res.result.items.map((item) => ({ ...item, id: uid() }));
+              setDetected(items);
+              setVisionProvider(res.result.provider);
+              toast.success(`Barcode matched: ${items[0]?.name ?? res.barcode}`, {
+                description: "Review the portion before adding it to the meal.",
+              });
+              return; // matched -> stop the loop
+            }
+            if (res.status === "unmatched" && res.barcode !== lastBarcodeRef.current) {
+              // Read a code, but it isn't in Open Food Facts. Note it once and keep
+              // scanning — the user can reposition or snap a photo for the model instead.
+              lastBarcodeRef.current = res.barcode;
+              toast.error(`Barcode ${res.barcode} isn't in the food database.`, {
+                description: "Try another angle, or capture a photo to analyze it.",
+              });
+            }
+          }
+        } catch {
+          // Network hiccup -> ignore and try the next frame.
+        }
+      }
+      // Tiny gap keeps the loop from busy-spinning if the video isn't ready yet.
+      if (!cancelled) timer = window.setTimeout(scanOnce, 120);
+    };
+    void scanOnce();
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [cameraOn]);
 
   const addReferenceFood = (food: (typeof MOCK_FOOD_DB)[number]) => {
     const grams = capturedWeight > 0 ? capturedWeight : 100;
@@ -550,6 +630,10 @@ function LogFood() {
                     >
                       <Aperture className="mr-2 h-4 w-4" /> Capture photo
                     </Button>
+                    <div className="mt-2 flex items-center gap-1.5 text-[11px] font-bold text-white/70">
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-green-400" />
+                      Barcode auto-scan on — hold a label up to log it instantly
+                    </div>
                   </div>
                 ) : (
                   <>
