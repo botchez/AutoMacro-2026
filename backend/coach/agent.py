@@ -204,6 +204,7 @@ def run_coach(
     verbose: bool = True,
     mode: str = "auto",
     history: list | None = None,
+    on_step=None,
 ) -> CoachResult:
     """Run the agent loop against `state` and return advice + a full transcript.
 
@@ -211,7 +212,20 @@ def run_coach(
     verdict), "chat" is the conversational assistant that answers the user's own
     question. In chat mode, pass `history` (a list of prior {role, content} turns,
     oldest first) so the model can hold the conversation.
+
+    `on_step`, if given, is called with small dicts as the loop progresses — {"type":
+    "tool", "name": <tool>} before each tool call, and {"type": "answer"} when the model
+    stops to write its reply — so a caller can surface live progress. It must never raise;
+    exceptions from it are swallowed so a progress hint can't break the run.
     """
+
+    def emit(event: dict) -> None:
+        if on_step is None:
+            return
+        try:
+            on_step(event)
+        except Exception:  # noqa: BLE001 - a progress hint must never break the loop
+            pass
     client = _client()
     model = DEFAULT_MODEL
     system_prompt = CHAT_SYSTEM_PROMPT if mode == "chat" else SYSTEM_PROMPT
@@ -282,6 +296,7 @@ def run_coach(
         # No tool calls -> this is the final answer. Strip any markdown the model added
         # so the chat UI always shows pure text (no **bold**, tables, or list syntax).
         if not tool_calls:
+            emit({"type": "answer"})
             text = _plain_text((msg.content or "").strip())
             events.append({"type": "final", "reasoning": reasoning, "text": text})
             return CoachResult(text, events, model, state.suggestions)
@@ -301,6 +316,7 @@ def run_coach(
         })
 
         for t in tool_calls:
+            emit({"type": "tool", "name": t["name"]})
             result = run_tool(state, t["name"], t["args"])
             events.append({
                 "type": "tool_result",

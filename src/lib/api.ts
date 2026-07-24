@@ -66,6 +66,15 @@ export type CoachRecommendation = {
   name: string;
   reason: string;
   serving: string;
+  /** Preloaded macros for the suggested serving, so the sidebar can log it instantly.
+   * Absent when the food couldn't be priced — the UI falls back to opening the logger. */
+  grams?: number | null;
+  calories?: number | null;
+  protein?: number | null;
+  carbs?: number | null;
+  fat?: number | null;
+  per100?: Macros | null;
+  source?: string | null;
 };
 export type CoachMessage = {
   role: "user" | "assistant";
@@ -175,14 +184,21 @@ export const api = {
       result: VisionResponse | null;
     }>("/api/vision/barcode/scan", { method: "POST", body: form });
   },
-  coachTip: () => request<CoachResponse>("/api/coach/tip"),
-  coachHistory: () =>
+  // `date` is the client's LOCAL day (YYYY-MM-DD) so the coach scopes "today" to the day
+  // the user is looking at, not a server clock (which is UTC and wrong near midnight).
+  coachTip: (date?: string) =>
+    request<CoachResponse>(`/api/coach/tip${date ? `?date=${encodeURIComponent(date)}` : ""}`),
+  // `date` scopes the thread to the client's local day, so a new day loads a fresh chat.
+  coachHistory: (date?: string) =>
     request<{ messages?: CoachMessage[]; recommendations?: CoachRecommendation[] }>(
-      "/api/coach/history",
+      `/api/coach/history${date ? `?date=${encodeURIComponent(date)}` : ""}`,
     ),
-  coachMessage: (message: string) =>
+  // Live progress of the coach's current run (the tools it's calling). Cheap to poll
+  // while a reply is generating so the UI can show it thinking.
+  coachStatus: () => request<{ active: boolean; steps: string[] }>("/api/coach/status"),
+  coachMessage: (message: string, date?: string) =>
     request<CoachResponse>("/api/coach/message", {
       method: "POST",
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, date }),
     }),
 };

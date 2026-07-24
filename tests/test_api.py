@@ -26,7 +26,7 @@ _AGENT_SETTINGS = SimpleNamespace(
 )
 
 
-def fake_run_coach(state, trigger, verbose=True, mode="auto", history=None):
+def fake_run_coach(state, trigger, verbose=True, mode="auto", history=None, on_step=None):
     """Stand-in for the real agent: returns advice + suggestions without any network."""
     if mode == "auto":
         return CoachResult(
@@ -116,17 +116,34 @@ class ApiFlowTests(unittest.TestCase):
         self.assertEqual(saved["time"], "13:15")
         self.assertEqual(saved["items"][0]["grams"], 220)
         # The coach runs the (mocked) agent. Suggestions are agent-driven via
-        # suggest_foods, shaped {name, serving, reason}.
+        # suggest_foods, and the service preloads real macros onto each one (history
+        # first, then an FDC lookup — patched here so the test stays offline).
+        fake_fdc = lambda name, use_cache=True: {  # noqa: E731 - test stub
+            "food_name": name,
+            "fdc_id": 1,
+            "macros_per_100g": {"kcal": 59, "protein": 10, "carbs": 3.6, "fat": 0.4},
+            "source": "fdc",
+            "cached": False,
+        }
         with patch("backend.services.coach.run_coach", side_effect=fake_run_coach), patch(
             "backend.services.coach.settings", _AGENT_SETTINGS
-        ):
+        ), patch("backend.vision.foodfacts.lookup", side_effect=fake_fdc):
             coach = self.client.get("/api/coach/tip", headers=self.headers)
             self.assertEqual(coach.status_code, 200, coach.text)
             self.assertEqual(coach.json()["source"], "coach-agent")
             self.assertTrue(coach.json()["message"])
             recs = coach.json()["recommendations"]
             self.assertTrue(recs)
-            self.assertEqual(set(recs[0]), {"name", "serving", "reason"})
+            # Base fields always present; macros preloaded so the sidebar can log instantly.
+            self.assertLessEqual({"name", "serving", "reason"}, set(recs[0]))
+            self.assertIsNotNone(recs[0]["grams"])
+            self.assertIsNotNone(recs[0]["calories"])
+            self.assertIn("per100", recs[0])
+            # The live-progress endpoint is readable; the run has finished by now.
+            status = self.client.get("/api/coach/status", headers=self.headers)
+            self.assertEqual(status.status_code, 200)
+            self.assertFalse(status.json()["active"])
+            self.assertIsInstance(status.json()["steps"], list)
             question = self.client.post(
                 "/api/coach/message",
                 headers=self.headers,
@@ -139,6 +156,13 @@ class ApiFlowTests(unittest.TestCase):
             self.assertGreaterEqual(len(history.json()["messages"]), 2)
             # The sidebar persists the coach's latest suggestions across reloads.
             self.assertTrue(history.json()["recommendations"])
+            # The thread is scoped to the local day: a different day is a fresh (empty)
+            # chat, so the conversation resets on a new day.
+            other_day = self.client.get(
+                "/api/coach/history?date=2000-01-01", headers=self.headers
+            )
+            self.assertEqual(other_day.status_code, 200)
+            self.assertEqual(other_day.json()["messages"], [])
 
         # Fail loud: when the agent errors there is no rule fallback — the coach
         # surfaces a 502 with the reason instead of a canned reply.

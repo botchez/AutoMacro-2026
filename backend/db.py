@@ -99,7 +99,10 @@ CREATE TABLE IF NOT EXISTS coach_messages (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    -- The user's LOCAL date this turn belongs to. The coach thread is scoped per day:
+    -- history returns only today's turns, so the chat starts fresh on a new day.
+    log_date TEXT
 );
 
 CREATE INDEX IF NOT EXISTS coach_messages_user_idx
@@ -143,7 +146,25 @@ def transaction(path: Path | None = None) -> Iterator[sqlite3.Connection]:
 def initialize_database(path: Path | None = None) -> None:
     with transaction(path) as connection:
         connection.executescript(SCHEMA)
+        _migrate(connection)
         _seed_demo(connection)
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Idempotent, additive migrations for databases created before a column existed.
+    `CREATE TABLE IF NOT EXISTS` never alters an existing table, so new columns are added
+    here. Safe to run on every startup: each step no-ops once applied."""
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(coach_messages)")
+    }
+    if "log_date" not in columns:
+        # Existing rows get a NULL log_date: they belong to no day, so the per-day
+        # history view simply won't surface them (an effective, non-destructive reset).
+        connection.execute("ALTER TABLE coach_messages ADD COLUMN log_date TEXT")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS coach_messages_user_day_idx "
+        "ON coach_messages(user_id, log_date)"
+    )
 
 
 def _seed_demo(connection: sqlite3.Connection) -> None:

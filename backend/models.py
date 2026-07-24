@@ -87,12 +87,25 @@ class MealIn(ApiModel):
 
 class CoachMessageIn(ApiModel):
     message: str = Field(min_length=1, max_length=2_000)
+    # The client's LOCAL date (YYYY-MM-DD), so the coach scopes "today" to the day the
+    # user is actually looking at rather than a server clock. Optional for compatibility.
+    date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 class CoachRecommendation(ApiModel):
     name: str
     reason: str
     serving: str
+    # Preloaded macros for the suggested serving, so the sidebar can log it instantly
+    # without a lookup. Absent (None) when the food couldn't be priced — the UI then
+    # falls back to opening the logger.
+    grams: float | None = None
+    calories: float | None = None
+    protein: float | None = None
+    carbs: float | None = None
+    fat: float | None = None
+    per100: dict | None = None
+    source: str | None = None
 
 
 class CoachMessageOut(ApiModel):
@@ -112,6 +125,15 @@ class CoachOut(ApiModel):
 class CoachHistoryOut(ApiModel):
     messages: list[CoachMessageOut]
     recommendations: list[CoachRecommendation]
+
+
+class CoachStatusOut(ApiModel):
+    """Live progress of the coach's current run, for the "watch it think" indicator.
+    `active` is true while the agent loop is running; `steps` are human-readable lines
+    (the tools it has called so far)."""
+
+    active: bool = False
+    steps: list[str] = []
 
 
 class Per100Macros(ApiModel):

@@ -220,11 +220,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       logs.sort((a, b) => (a.date < b.date ? 1 : -1));
       return { ...current, logs };
     });
-    // Every logged batch auto-triggers the coach: coachTip() runs the agent in "auto"
-    // mode over the just-submitted batch and persists its advice, so the dashboard
-    // shows fresh coaching next time it loads. Fire-and-forget — never block the save.
-    void api.coachTip().catch(() => {});
-    // Signal any mounted CoachPanel to run its coach check live (see mealsLogged).
+    // Every logged batch auto-triggers the coach ONCE, from here (always mounted, so it
+    // works from any page): coachTip() runs the agent in "auto" mode over the just-logged
+    // batch and APPENDS its advice to the day's persistent thread. Fire-and-forget — never
+    // block the save. A mounted CoachPanel watches this run live via mealsLogged (it does
+    // not fire its own call), so there's exactly one coach run per logged batch.
+    void api.coachTip(todayIso()).catch(() => {});
     setMealsLogged((count) => count + 1);
   }, []);
 

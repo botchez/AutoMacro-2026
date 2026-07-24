@@ -61,6 +61,14 @@ class CoachState:
     # macro name -> list of food names strong in that macro.
     history_by_macro: dict = field(default_factory=dict)
 
+    # Every distinct food the user has ever logged, indexed by lowercased name, with the
+    # per-100g density and a typical portion derived from their own logs:
+    #   {lower_name: {"name", "per100": {calories,protein,carbs,fat}, "typical_grams",
+    #                 "source"}}
+    # Used to price the agent's sidebar suggestions from the user's real macros (no lookup
+    # needed) so "Add" is instant. Empty for a brand-new user with no history.
+    history_foods: dict = field(default_factory=dict)
+
     # Where we are in the day.
     day_context: dict = field(
         default_factory=lambda: {
