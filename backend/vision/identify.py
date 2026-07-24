@@ -51,10 +51,11 @@ VISION_REASONING = os.getenv("VISION_REASONING", "1").lower() in ("1", "true", "
 # Token caps. VISION_MAX_TOKENS is the overall completion ceiling; VISION_REASONING_MAX_TOKENS
 # bounds just the thinking budget so a model can't ruminate forever — kept well below the
 # overall cap so the JSON always has room to finish (a truncated reply = a failed identify).
-# 256 is enough thinking for the tricky calls (packaged-vs-label routing); higher just adds
-# latency here — the model spends the whole budget every image with no accuracy gain.
+# 256 turned out to guillotine the model mid-thought on the tricky calls (packaged-vs-label
+# routing on a blurry carton), so the default is 1024 — enough headroom to finish reasoning
+# without leaving less than the JSON needs. Lower it via env if latency matters more.
 VISION_MAX_TOKENS = int(os.getenv("VISION_MAX_TOKENS", "2500"))
-VISION_REASONING_MAX_TOKENS = int(os.getenv("VISION_REASONING_MAX_TOKENS", "256"))
+VISION_REASONING_MAX_TOKENS = int(os.getenv("VISION_REASONING_MAX_TOKENS", "1024"))
 
 # Downscale for the MODEL call only (image tokens dominate vision cost). 1024px on the
 # long edge is the OCR-safe sweet spot — small enough to cut a phone photo ~15x in
@@ -458,12 +459,17 @@ def _resolve_component(raw: dict, note) -> dict:
                 comp["barcode"] = hit["barcode"]
             note(f"{name!r} -> Open Food Facts: {hit['food_name']}")
             return comp
-        # OFF miss -> a genuine label read still beats a bare estimate.
-        comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
-        comp["macro_source"] = "label" if src == "ocr" else "estimate"
-        how = "read from label" if src == "ocr" else "model estimate"
-        note(f"{name!r} -> packaged but no Open Food Facts match; using {how}")
-        return comp
+        # OFF miss (e.g. the model misread the brand, or OFF 503'd). A genuine label
+        # read is still ground truth; otherwise fall through to a generic USDA FDC
+        # lookup on the food name below — a named product like "orange juice" is in FDC
+        # even when the exact brand isn't in OFF — before we ever use the bare estimate.
+        if src == "ocr":
+            comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))
+            comp["macro_source"] = "label"
+            note(f"{name!r} -> packaged, no Open Food Facts match; using label read")
+            return comp
+        note(f"{name!r} -> packaged, no Open Food Facts match; trying USDA FDC for the generic food")
+        # fall through to the FDC lookup below
 
     if src == "ocr":  # non-packaged label read -> the panel is the ground truth
         comp["per_100g"] = _coerce_per_100g(raw.get("est_per_100g"))

@@ -50,6 +50,9 @@ _PROCESSED_MARKERS = (
     "breaded", "batter", "battered", "microwaved", "canned", "sauce", "gravy",
     "fast food", "restaurant", "frozen meal", "dinner", "nugget", "patty",
     "flavored", "seasoned", "smoked", "cured", "sweetened", "with ",
+    # babyfood/infant entries flood FDC juice/puree searches and tie the clean generic
+    # row on score; an adult-food query never wants them.
+    "babyfood", "baby food", "infant",
     # derived/dessert forms that shouldn't match a plain-ingredient name
     "yogurt", "juice", "beverage", "drink", "snack", "dessert", "chips",
     "cracker", "cake", "bar,", "spread",
