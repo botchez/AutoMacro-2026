@@ -197,23 +197,28 @@ export function CoachPanel() {
         2,
         "0",
       )}`;
-      await addMeal(todayIso(), {
-        id: uid(),
-        time,
-        items: [
-          {
-            id: uid(),
-            name: logTarget.name,
-            grams,
-            calories: Math.round(per100.calories * factor),
-            protein: round1(per100.protein * factor),
-            carbs: round1(per100.carbs * factor),
-            fat: round1(per100.fat * factor),
-            source: logTarget.source ?? "coach",
-            per100,
-          },
-        ],
-      });
+      await addMeal(
+        todayIso(),
+        {
+          id: uid(),
+          time,
+          items: [
+            {
+              id: uid(),
+              name: logTarget.name,
+              grams,
+              calories: Math.round(per100.calories * factor),
+              protein: round1(per100.protein * factor),
+              carbs: round1(per100.carbs * factor),
+              fat: round1(per100.fat * factor),
+              source: logTarget.source ?? "coach",
+              per100,
+            },
+          ],
+        },
+        // Accepting the coach's own suggestion — don't re-run the coach on it.
+        { triggerCoach: false },
+      );
       setLoggedNames((current) => [...current, logTarget.name]);
       toast.success(`${logTarget.name} logged`, {
         description: `${grams}g · ${Math.round(per100.calories * factor)} kcal`,
@@ -312,15 +317,13 @@ export function CoachPanel() {
           // navigated away while it was thinking) — re-attach and show its progress.
           if (savedMessages[savedMessages.length - 1].role === "user") startWatch();
         } else {
-          const tip = await api.coachTip(todayIso());
-          setMessages([
-            {
-              role: "assistant",
-              content: tip.message,
-              createdAt: new Date().toISOString(),
-            },
-          ]);
-          setRecommendations(Array.isArray(tip.recommendations) ? tip.recommendations : []);
+          // No thread yet — generate the opening tip. Fire it and WATCH the run (rather
+          // than awaiting a stepless spinner) so its live tool-call steps show while it
+          // thinks; the watch reads the committed reply back from history when it lands.
+          startWatch();
+          void api
+            .coachTip(todayIso())
+            .catch(() => settleError("⚠️ Coach unavailable. Log a meal and try again."));
         }
       } catch {
         setMessages([
@@ -341,7 +344,10 @@ export function CoachPanel() {
   useEffect(() => {
     const thread = threadRef.current;
     if (thread) thread.scrollTop = thread.scrollHeight;
-  }, [messages, loading]);
+    // `pending`/`steps` are included so the "Coach is working…" indicator scrolls into
+    // view the moment a run starts (e.g. right after logging a meal), not just when the
+    // finished message lands.
+  }, [messages, loading, pending, steps]);
 
   const ask = async (question = message) => {
     const trimmed = question.trim();

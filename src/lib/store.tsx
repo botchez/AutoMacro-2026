@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { toast } from "sonner";
 import { api } from "./api";
 
 export type Macros = {
@@ -97,7 +98,9 @@ type Ctx = State & {
   setGoals: (goals: Goals) => Promise<void>;
   updateSettings: (settings: UserSettings) => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
-  addMeal: (date: string, meal: MealEntry) => Promise<void>;
+  // `triggerCoach` defaults to true (a normal log auto-runs the coach). The coach's own
+  // suggestion sidebar passes false so accepting its suggestion doesn't re-run it.
+  addMeal: (date: string, meal: MealEntry, options?: { triggerCoach?: boolean }) => Promise<void>;
   updateMeal: (date: string, meal: MealEntry) => Promise<void>;
   deleteMeal: (mealId: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -207,27 +210,68 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await api.changePassword(currentPassword, newPassword);
   }, []);
 
-  const addMeal = useCallback(async (date: string, meal: MealEntry) => {
-    await api.addMeal(date, meal);
-    setState((current) => {
-      const logs = [...current.logs];
-      const index = logs.findIndex((day) => day.date === date);
-      if (index >= 0) {
-        logs[index] = { ...logs[index], meals: [...logs[index].meals, meal] };
-      } else {
-        logs.push({ date, meals: [meal] });
-      }
-      logs.sort((a, b) => (a.date < b.date ? 1 : -1));
-      return { ...current, logs };
-    });
-    // Every logged batch auto-triggers the coach ONCE, from here (always mounted, so it
-    // works from any page): coachTip() runs the agent in "auto" mode over the just-logged
-    // batch and APPENDS its advice to the day's persistent thread. Fire-and-forget — never
-    // block the save. A mounted CoachPanel watches this run live via mealsLogged (it does
-    // not fire its own call), so there's exactly one coach run per logged batch.
-    void api.coachTip(todayIso()).catch(() => {});
-    setMealsLogged((count) => count + 1);
-  }, []);
+  const addMeal = useCallback(
+    async (date: string, meal: MealEntry, options?: { triggerCoach?: boolean }) => {
+      await api.addMeal(date, meal);
+      setState((current) => {
+        const logs = [...current.logs];
+        const index = logs.findIndex((day) => day.date === date);
+        if (index >= 0) {
+          logs[index] = { ...logs[index], meals: [...logs[index].meals, meal] };
+        } else {
+          logs.push({ date, meals: [meal] });
+        }
+        logs.sort((a, b) => (a.date < b.date ? 1 : -1));
+        return { ...current, logs };
+      });
+      // Logging from the coach's own suggestion sidebar passes { triggerCoach: false }: the
+      // coach just recommended this food, so re-running it to react to the user accepting its
+      // own suggestion is redundant (and would spend a needless model call). Skip both the
+      // run and the mealsLogged bump so the CoachPanel's watcher doesn't flash either.
+      if (options?.triggerCoach === false) return;
+      // Every logged batch auto-triggers the coach ONCE, from here (always mounted, so it
+      // works from any page): coachTip() runs the agent in "auto" mode over the just-logged
+      // batch and APPENDS its advice to the day's persistent thread. Fire-and-forget — never
+      // block the save. A mounted CoachPanel watches this run live via mealsLogged (it does
+      // not fire its own call), so there's exactly one coach run per logged batch.
+      //
+      // Surface the run with a toast so it's obvious a reply is generating even when logging
+      // from a page without the coach panel in view (e.g. /log-food). The toast tracks the
+      // coach's LIVE tool calls (polled from /coach/status, the same steps the panel shows)
+      // so the user sees WHAT it's doing — "Checking today's totals", "Reading your target" —
+      // then resolves to a brief success or quietly dismisses on error so it never hangs.
+      const coachToastId = toast.loading("Coach is reviewing your meal…");
+      let watching = true;
+      const trackSteps = async () => {
+        // ~90s ceiling so a stuck/never-resolving run can't poll forever.
+        for (let i = 0; i < 90 && watching; i++) {
+          try {
+            const status = await api.coachStatus();
+            const latest = status.steps?.[status.steps.length - 1];
+            if (watching && status.active && latest) {
+              toast.loading(`${latest}…`, { id: coachToastId });
+            }
+          } catch {
+            // transient — keep watching
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      };
+      void trackSteps();
+      api
+        .coachTip(todayIso())
+        .then(() => {
+          watching = false;
+          toast.success("Coach added a new tip", { id: coachToastId, duration: 2500 });
+        })
+        .catch(() => {
+          watching = false;
+          toast.dismiss(coachToastId);
+        });
+      setMealsLogged((count) => count + 1);
+    },
+    [],
+  );
 
   const updateMeal = useCallback(async (date: string, meal: MealEntry) => {
     await api.updateMeal(date, meal);
