@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Check, Loader2, Plus, Send, Sparkles, Utensils } from "lucide-react";
+import { Check, Loader2, Plus, Send, Sparkles, Trash2, Utensils } from "lucide-react";
 import { toast } from "sonner";
 import coachHero from "@/assets/bicepsflex.png";
 import { api, type CoachMessage, type CoachRecommendation } from "@/lib/api";
@@ -50,6 +50,8 @@ export function CoachPanel() {
   // real clock. Applies to both the chat and the "Run coach tip" button.
   const [devHour, setDevHour] = useState("");
   const [devRunning, setDevRunning] = useState(false);
+  // Wiping the day's thread + sidebar and reopening with a fresh tip.
+  const [clearing, setClearing] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const { mealsLogged, addMeal } = useApp();
 
@@ -255,6 +257,44 @@ export function CoachPanel() {
     }
   };
 
+  // Clear today's conversation: stop any in-flight watch, wipe the thread and sidebar
+  // server-side, then reopen with a fresh coach tip so the panel isn't left blank.
+  const clearChat = async () => {
+    if (loading || pending || clearing) return;
+    setClearing(true);
+    stopWatch();
+    settledRef.current = true;
+    try {
+      await api.coachClear(todayIso());
+      setSteps([]);
+      setPending(false);
+      setRecommendationContext("today’s macro gaps");
+      // Reopen with a fresh tip, mirroring first load; fall back to a static line if the
+      // agent is unavailable so we still show an empty, usable chat.
+      try {
+        const tip = await api.coachTip(todayIso());
+        setMessages([
+          { role: "assistant", content: tip.message, createdAt: new Date().toISOString() },
+        ]);
+        setRecommendations(Array.isArray(tip.recommendations) ? tip.recommendations : []);
+      } catch {
+        setMessages([
+          {
+            role: "assistant",
+            content: "Cleared. Log a meal or ask me anything to start fresh.",
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+        setRecommendations([]);
+      }
+      toast.success("Chat cleared");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not clear the chat");
+    } finally {
+      setClearing(false);
+    }
+  };
+
   useEffect(() => {
     const loadConversation = async () => {
       setLoading(true);
@@ -390,6 +430,20 @@ export function CoachPanel() {
                   Your conversation is saved and updates with every meal.
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={() => void clearChat()}
+                disabled={loading || pending || clearing || messages.length === 0}
+                aria-label="Clear conversation"
+                className="flex shrink-0 items-center gap-1.5 self-start rounded-full border bg-white/70 px-3 py-1.5 text-xs font-bold text-foreground/70 transition-colors hover:border-rose-300 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800/70 dark:text-slate-300 dark:hover:border-rose-500/50 dark:hover:text-rose-400"
+              >
+                {clearing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                Clear
+              </button>
             </div>
 
             <div

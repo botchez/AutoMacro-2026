@@ -577,6 +577,16 @@ def coach_history(
     return CoachService(connection).history(user["id"], today=date)
 
 
+@app.delete("/api/coach/history", response_model=CoachHistoryOut)
+def coach_clear(
+    date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    user: sqlite3.Row = Depends(current_user),
+    connection: sqlite3.Connection = Depends(db_connection),
+):
+    """Clear the day's coach thread and sidebar suggestions, starting a fresh chat."""
+    return CoachService(connection).clear(user["id"], today=date)
+
+
 @app.get("/api/coach/status", response_model=CoachStatusOut)
 def coach_status(user: sqlite3.Row = Depends(current_user)):
     """Live progress of the user's current coach run (the tools it's calling). Cheap and

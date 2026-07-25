@@ -199,6 +199,12 @@ export const api = {
     request<{ messages?: CoachMessage[]; recommendations?: CoachRecommendation[] }>(
       `/api/coach/history${date ? `?date=${encodeURIComponent(date)}` : ""}`,
     ),
+  // Wipe the day's coach thread and sidebar suggestions, returning the empty history.
+  coachClear: (date?: string) =>
+    request<{ messages?: CoachMessage[]; recommendations?: CoachRecommendation[] }>(
+      `/api/coach/history${date ? `?date=${encodeURIComponent(date)}` : ""}`,
+      { method: "DELETE" },
+    ),
   // Live progress of the coach's current run (the tools it's calling). Cheap to poll
   // while a reply is generating so the UI can show it thinking.
   coachStatus: () => request<{ active: boolean; steps: string[] }>("/api/coach/status"),
