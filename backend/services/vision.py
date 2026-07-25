@@ -246,6 +246,14 @@ class VisionCascade:
         try:
             result = identify(image, grams=None, mime=mime, verbose=False)
         except Exception:  # noqa: BLE001 - model/network error -> fallback
+            # Never swallow silently: a downstream error here throws away a possibly
+            # correct model result and substitutes a filename-guessed food, which looks
+            # exactly like "the backend was right but the UI showed the wrong item".
+            # Log the traceback so that failure is diagnosable instead of invisible.
+            import traceback
+
+            print("[vision] identify() failed; falling back to filename guess:")
+            traceback.print_exc()
             return [], "", None, None
 
         self._maybe_write_transcript(filename, result)

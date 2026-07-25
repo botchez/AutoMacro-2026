@@ -397,6 +397,11 @@ function LogFood() {
   // grams without restarting.
   const lastBarcodeRef = useRef<string | null>(null);
   const weightRef = useRef(0);
+  // Monotonic id for analyze calls so an older, slower response can't overwrite the
+  // result of a newer capture (out-of-order responses when captures overlap — a manual
+  // snap while an auto-capture is in flight, or two quick re-frames). Only the latest
+  // call is allowed to touch the shared detection/scanning state.
+  const analyzeSeqRef = useRef(0);
   const [detected, setDetected] = useState<FoodItem[]>([]);
   const [mealItems, setMealItems] = useState<FoodItem[]>([]);
   const [visionProvider, setVisionProvider] = useState<string | null>(null);
@@ -749,6 +754,9 @@ function LogFood() {
   const analyzeImage = async (
     file: File,
   ): Promise<{ items: DetectedItem[]; estimatedGrams: number | null } | null> => {
+    // Claim this as the newest analyze; any call that started earlier is now stale and
+    // must not apply its (older-frame) result over ours.
+    const seq = ++analyzeSeqRef.current;
     if (imagePreview) URL.revokeObjectURL(imagePreview);
     setImagePreview(URL.createObjectURL(file));
     setScanning(true);
@@ -756,14 +764,20 @@ function LogFood() {
       // The server cascade decodes any barcode in the frame (pyzbar) before the model,
       // so a captured/uploaded barcode photo already resolves to the exact product.
       const result = await api.analyze(file);
+      // A newer capture superseded this one while it was in flight — drop this result so
+      // an out-of-order response can never overwrite the latest detection.
+      if (seq !== analyzeSeqRef.current) return null;
       setVisionProvider(result.provider);
       setVisionDebug(result.debug ?? null);
       return { items: result.items, estimatedGrams: result.estimatedGrams ?? null };
     } catch (error) {
+      if (seq !== analyzeSeqRef.current) return null; // stale failure — stay quiet
       toast.error(error instanceof Error ? error.message : "Could not analyze that image");
       return null;
     } finally {
-      setScanning(false);
+      // Only the latest analyze owns the shared scanning spinner; a stale one ending
+      // must not clear it out from under the in-flight newest call.
+      if (seq === analyzeSeqRef.current) setScanning(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
