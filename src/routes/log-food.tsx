@@ -370,9 +370,8 @@ function LogFood() {
   // drives the "remove the item" prompt. Mirrors rearmNeededRef, but as state so
   // the UI re-renders (the ref alone doesn't).
   const [awaitingRemoval, setAwaitingRemoval] = useState(false);
-  // A capture paused for a portion decision (log by serving vs re-weigh).
+  // A capture paused for a portion decision (log by serving vs weigh + capture).
   const [pendingCapture, setPendingCapture] = useState<PendingCapture | null>(null);
-  const [reweighing, setReweighing] = useState(false); // waiting for a fresh weight
   const [servingSize, setServingSize] = useState(String(DEFAULT_SERVING_G));
   const [servingCount, setServingCount] = useState("1");
   const readingsRef = useRef<{ t: number; w: number }[]>([]); // rolling settle window
@@ -380,7 +379,6 @@ function LogFood() {
   const rearmNeededRef = useRef(false); // wait for an empty plate before re-arming
   const latestWeightRef = useRef<number | null>(null); // newest reading, for the poll loop
   const pendingCaptureRef = useRef<PendingCapture | null>(null); // mirror, for the poll loop
-  const reweighingRef = useRef(false); // mirror, for the poll loop
   // Live webcam capture
   const [cameraOn, setCameraOn] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
@@ -617,7 +615,6 @@ function LogFood() {
     autoBusyRef.current = false;
     setAwaitingRemoval(false);
     setPendingCapture(null);
-    setReweighing(false);
     setCapturedWeight(0);
     await scale.tare();
     setAutoActive(true);
@@ -630,7 +627,6 @@ function LogFood() {
     rearmNeededRef.current = false;
     setAwaitingRemoval(false);
     setPendingCapture(null);
-    setReweighing(false);
   };
 
   const openLogNow = async () => {
@@ -744,6 +740,13 @@ function LogFood() {
       toast.error("Place food on the scale or create a reading first.");
       return;
     }
+    // A capture is paused for a portion decision — the user has weighed the actual
+    // portion and pressed Capture weight to log it at this reading. Nothing is logged
+    // automatically on settle; this button is the explicit trigger.
+    if (pendingCaptureRef.current) {
+      commitPending(pendingCaptureRef.current, liveWeight);
+      return;
+    }
     setCapturedWeight(liveWeight);
     toast.success("Weight captured", { description: `${liveWeight}g will guide detection.` });
   };
@@ -835,7 +838,6 @@ function LogFood() {
       `Added ${scaled.length} food${scaled.length === 1 ? "" : "s"} · ${Math.round(totalGrams)}g — remove it for the next`,
     );
     setPendingCapture(null);
-    setReweighing(false);
     setCapturedWeight(0);
     rearmNeededRef.current = true; // wait for the plate to be cleared before re-arming
     readingsRef.current = [];
@@ -850,22 +852,9 @@ function LogFood() {
     commitPending(pendingCapture, sizeG * count);
   };
 
-  // "Weigh the food again": keep the identity, zero the scale, and wait for a
-  // fresh settled weight (handled in the poll loop's re-weigh branch).
-  const weighAgain = async () => {
-    if (!pendingCapture) return;
-    readingsRef.current = [];
-    setReweighing(true);
-    await scale.tare();
-    toast("Place the food on the scale", {
-      description: "We'll log it automatically once the weight settles.",
-    });
-  };
-
   // Discard a paused capture without logging; wait for removal before re-arming.
   const cancelPending = () => {
     setPendingCapture(null);
-    setReweighing(false);
     rearmNeededRef.current = true;
     readingsRef.current = [];
     setAwaitingRemoval(true);
@@ -905,29 +894,14 @@ function LogFood() {
     }
   };
 
-  // Log a re-weighed capture at a freshly settled weight. Called from the poll loop.
-  const finalizeReweigh = (grams: number) => {
-    const pend = pendingCaptureRef.current;
-    if (!pend) {
-      setReweighing(false);
-      autoBusyRef.current = false;
-      return;
-    }
-    commitPending(pend, grams);
-    autoBusyRef.current = false;
-  };
-
   // Keep live refs so the settle effect calls the latest closures without
   // re-subscribing on every render.
   const runAutoCaptureRef = useRef(runAutoCapture);
   runAutoCaptureRef.current = runAutoCapture;
-  const finalizeReweighRef = useRef(finalizeReweigh);
-  finalizeReweighRef.current = finalizeReweigh;
   // Mirror latest reading + loop state into refs so the polling loop reads current
   // values even when React skips re-renders (identical state bails out).
   latestWeightRef.current = scale.weight;
   pendingCaptureRef.current = pendingCapture;
-  reweighingRef.current = reweighing;
 
   // Settle detection: watch the streamed weight and fire one auto-capture once a
   // reading has held steady for a full window.
@@ -970,16 +944,8 @@ function LogFood() {
         }
       }
 
-      // Re-weigh mode: the food is already identified; log it at the fresh weight.
-      if (reweighingRef.current) {
-        if (settled) {
-          autoBusyRef.current = true;
-          finalizeReweighRef.current(w);
-        }
-        return;
-      }
-
       // Paused on a portion decision — don't trigger anything until the user picks.
+      // Nothing is logged automatically on settle; the user commits via the buttons.
       if (pendingCaptureRef.current) return;
 
       // After a capture, wait for the item to be removed (plate reads empty)
@@ -1009,7 +975,6 @@ function LogFood() {
     if (autoActive && (!scale.connected || !editorOpen)) {
       setAutoActive(false);
       setPendingCapture(null);
-      setReweighing(false);
     }
   }, [autoActive, scale.connected, editorOpen]);
 
@@ -1345,7 +1310,7 @@ function LogFood() {
                           </div>
                         </div>
                       )}
-                      {pendingCapture && !scanning && !reweighing && (
+                      {pendingCapture && !scanning && (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/65 backdrop-blur-sm">
                           <span className="grid h-12 w-12 place-items-center rounded-full bg-primary/25">
                             <Check className="h-7 w-7 text-primary" />
@@ -1353,18 +1318,8 @@ function LogFood() {
                           <div className="text-center">
                             <div className="font-extrabold">Food identified</div>
                             <div className="mt-0.5 text-xs text-white/70">
-                              Choose a portion on the right — by serving or weigh it.
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      {reweighing && (
-                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/65 backdrop-blur-sm">
-                          <Scale className="h-9 w-9 text-sun" />
-                          <div className="text-center">
-                            <div className="font-extrabold">Weigh the food</div>
-                            <div className="mt-0.5 text-xs text-white/70">
-                              Place it on the scale — logs once the weight settles.
+                              Choose a portion on the right — by serving, or weigh it and
+                              press Capture weight.
                             </div>
                           </div>
                         </div>
@@ -1517,10 +1472,103 @@ function LogFood() {
                     )}
                   </div>
                 </div>
-                <Button onClick={captureWeight} className="mt-3 w-full rounded-xl font-bold">
-                  <Scale className="mr-2 h-4 w-4" /> Capture weight
-                </Button>
-                {scale.connected && (
+                {pendingCapture ? (
+                  <div className="mt-4 border-t border-primary/20 pt-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
+                          Identified · choose a portion
+                        </div>
+                        <h3 className="mt-0.5 truncate text-lg font-black">
+                          {pendingCapture.items.map((it) => it.name).join(", ")}
+                        </h3>
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          {[...new Set(pendingCapture.items.map((it) => it.source ?? ""))].map(
+                            (src) => (
+                              <SourceBadge key={src} source={src} />
+                            ),
+                          )}
+                          <span className="text-xs text-muted-foreground">
+                            · captured at {Math.round(pendingCapture.triggerGrams)}g
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={cancelPending}
+                        aria-label="Discard capture"
+                        className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="mt-3 rounded-xl border bg-card p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-extrabold">Log by serving size</div>
+                        <span className="text-xs font-bold text-muted-foreground">
+                          {Math.round(servingTotalG)}g · {servingPreviewCals} kcal
+                        </span>
+                      </div>
+                      {pendingCapture.servingGrams == null && (
+                        <div className="mt-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-300">
+                          No serving size on the label — enter it below.
+                        </div>
+                      )}
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-bold">
+                        <div className="flex items-center gap-1 rounded-lg border bg-muted/30 px-2">
+                          <Input
+                            type="number"
+                            min={1}
+                            value={servingSize}
+                            onChange={(event) => setServingSize(event.target.value)}
+                            aria-label="Serving size in grams"
+                            className="h-9 w-16 border-0 bg-transparent p-1 text-center font-bold shadow-none"
+                          />
+                          <span className="text-muted-foreground">g</span>
+                        </div>
+                        <span className="text-muted-foreground">×</span>
+                        <div className="flex items-center gap-1 rounded-lg border bg-muted/30 px-2">
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.5"
+                            value={servingCount}
+                            onChange={(event) => setServingCount(event.target.value)}
+                            aria-label="Number of servings"
+                            className="h-9 w-14 border-0 bg-transparent p-1 text-center font-bold shadow-none"
+                          />
+                          <span className="text-muted-foreground">serv</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Weigh & log at the live reading, or log by the serving size — stacked */}
+                    <div className="mt-3 space-y-2">
+                      <Button
+                        onClick={captureWeight}
+                        variant="outline"
+                        className="w-full rounded-xl font-bold"
+                      >
+                        <Scale className="mr-2 h-4 w-4" /> Capture weight
+                      </Button>
+                      <Button onClick={logByServing} className="w-full rounded-xl font-bold">
+                        <Check className="mr-2 h-4 w-4" /> Log this serving
+                      </Button>
+                    </div>
+                    <div className="mt-2 text-[11px] leading-4 text-muted-foreground">
+                      <span className="font-bold">Capture weight</span> logs it at the live scale
+                      reading (Tare, then weigh the actual portion).{" "}
+                      <span className="font-bold">Log this serving</span> uses the serving size
+                      above.
+                    </div>
+                  </div>
+                ) : (
+                  <Button onClick={captureWeight} className="mt-3 w-full rounded-xl font-bold">
+                    <Scale className="mr-2 h-4 w-4" /> Capture weight
+                  </Button>
+                )}
+                {scale.connected && !pendingCapture && (
                   <div className="mt-3">
                     {autoActive ? (
                       <div
@@ -1543,11 +1591,6 @@ function LogFood() {
                             <>
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               Identifying food…
-                            </>
-                          ) : reweighing ? (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              Weighing — waiting for it to settle…
                             </>
                           ) : pendingCapture ? (
                             <>
@@ -1619,107 +1662,6 @@ function LogFood() {
                     </Button>
                   ))}
               </section>
-
-              {pendingCapture && (
-                <section className="rounded-2xl border-2 border-primary/40 bg-primary/5 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-xs font-extrabold uppercase tracking-wider text-primary">
-                        Identified · choose a portion
-                      </div>
-                      <h3 className="mt-0.5 truncate text-lg font-black">
-                        {pendingCapture.items.map((it) => it.name).join(", ")}
-                      </h3>
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {[...new Set(pendingCapture.items.map((it) => it.source ?? ""))].map(
-                          (src) => (
-                            <SourceBadge key={src} source={src} />
-                          ),
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          · captured at {Math.round(pendingCapture.triggerGrams)}g
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={cancelPending}
-                      aria-label="Discard capture"
-                      className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  {/* Option 1 — log by serving size */}
-                  <div className="mt-3 rounded-xl border bg-card p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-extrabold">Log by serving size</div>
-                      <span className="text-xs font-bold text-muted-foreground">
-                        {Math.round(servingTotalG)}g · {servingPreviewCals} kcal
-                      </span>
-                    </div>
-                    {pendingCapture.servingGrams == null && (
-                      <div className="mt-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-300">
-                        No serving size on the label — enter it below.
-                      </div>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-bold">
-                      <div className="flex items-center gap-1 rounded-lg border bg-muted/30 px-2">
-                        <Input
-                          type="number"
-                          min={1}
-                          value={servingSize}
-                          onChange={(event) => setServingSize(event.target.value)}
-                          aria-label="Serving size in grams"
-                          className="h-9 w-16 border-0 bg-transparent p-1 text-center font-bold shadow-none"
-                        />
-                        <span className="text-muted-foreground">g</span>
-                      </div>
-                      <span className="text-muted-foreground">×</span>
-                      <div className="flex items-center gap-1 rounded-lg border bg-muted/30 px-2">
-                        <Input
-                          type="number"
-                          min={0}
-                          step="0.5"
-                          value={servingCount}
-                          onChange={(event) => setServingCount(event.target.value)}
-                          aria-label="Number of servings"
-                          className="h-9 w-14 border-0 bg-transparent p-1 text-center font-bold shadow-none"
-                        />
-                        <span className="text-muted-foreground">serv</span>
-                      </div>
-                    </div>
-                    <Button onClick={logByServing} className="mt-2 w-full rounded-xl font-bold">
-                      <Check className="mr-2 h-4 w-4" /> Log this serving
-                    </Button>
-                  </div>
-
-                  {/* Option 2 — weigh the food again */}
-                  <div className="mt-2 rounded-xl border bg-card p-3">
-                    <div className="text-sm font-extrabold">Weigh the food</div>
-                    {reweighing ? (
-                      <div className="mt-2 flex items-center gap-2 text-xs font-bold text-primary">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Place it on the scale — logging once the weight settles…
-                      </div>
-                    ) : (
-                      <>
-                        <div className="mt-0.5 text-[11px] text-muted-foreground">
-                          Zero the scale and weigh the actual portion (e.g. cereal poured out).
-                        </div>
-                        <Button
-                          onClick={() => void weighAgain()}
-                          variant="outline"
-                          className="mt-2 w-full rounded-xl font-bold"
-                        >
-                          <Scale className="mr-2 h-4 w-4" /> Weigh it now
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </section>
-              )}
 
               {detected.length > 0 && (
                 <section className="rounded-2xl border p-4">
