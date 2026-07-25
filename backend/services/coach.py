@@ -189,6 +189,24 @@ class CoachService:
             "recommendations": self._load_suggestions(user_id),
         }
 
+    def clear(self, user_id: str, today: str | None = None) -> dict:
+        """Wipe the user's coach thread for the local day and empty the sidebar.
+
+        The chat is scoped per local day, so this deletes today's `coach_messages`
+        (older days are untouched) and clears the one-row `coach_suggestions` so the
+        "Recommended foods" panel resets too. Returns the now-empty history shape so the
+        client can drop straight into a fresh conversation."""
+        day = self._valid_date(today) or self._local_today()
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM coach_messages WHERE user_id = ? AND log_date = ?",
+                (user_id, day),
+            )
+            self.connection.execute(
+                "DELETE FROM coach_suggestions WHERE user_id = ?", (user_id,)
+            )
+        return {"messages": [], "recommendations": []}
+
     # --- the validated agent -----------------------------------------------------
 
     async def _agent_reply(
