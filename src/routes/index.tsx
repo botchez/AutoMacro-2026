@@ -1,10 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
+import broccoliImage from "@/assets/brocolli.png";
 import cornImage from "@/assets/corn.png";
 import skinnyImage from "@/assets/skinny.png";
 import bulkyImage from "@/assets/bulky.png";
 import buffImage from "@/assets/buff.png";
-import { Mascot } from "@/components/Mascot";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -114,7 +114,13 @@ function AuthPage() {
     <div className="min-h-screen flex flex-col md:flex-row">
       <div className="hidden items-center justify-center bg-gradient-to-br from-primary/20 via-sun/20 to-sky/20 p-10 transition-colors dark:from-emerald-950/70 dark:via-slate-950 dark:to-cyan-950/50 md:flex md:w-1/2">
         <div className="max-w-md text-center">
-          <Mascot size={180} className="mx-auto animate-float" />
+          <img
+            src={broccoliImage}
+            alt="Broccoli mascot"
+            width={180}
+            height={180}
+            className="mx-auto block h-[180px] w-[180px] object-contain animate-float"
+          />
           <h1 className="mt-6 text-4xl font-extrabold tracking-tight">
             Nutrition that works for <span className="text-primary">real life</span>.
           </h1>
@@ -131,7 +137,13 @@ function AuthPage() {
       <div className="flex flex-1 items-center justify-center bg-background/35 p-6 transition-colors dark:bg-slate-950/20">
         <div className="w-full max-w-md card-soft p-6 md:p-8 animate-pop">
           <div className="flex md:hidden justify-center mb-4">
-            <Mascot size={80} className="animate-float" />
+            <img
+              src={broccoliImage}
+              alt="Broccoli mascot"
+              width={80}
+              height={80}
+              className="block h-20 w-20 object-contain animate-float"
+            />
           </div>
           <h2 className="text-2xl font-extrabold text-center">Welcome to NutriCoach</h2>
           <p className="text-center text-sm text-muted-foreground mt-1">
