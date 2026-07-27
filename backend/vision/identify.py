@@ -85,7 +85,7 @@ OFF_TIMEOUT_S = 6
 # a compliant UA also avoids being throttled as an unidentified bot. Override the
 # contact via env if you fork this. (Auth is only needed for WRITE ops, which we never do.)
 OFF_USER_AGENT = os.getenv(
-    "OFF_USER_AGENT", "hackxperience/0.1 (wongyida92@gmail.com)"
+    "OFF_USER_AGENT", "nutricoach/1.0 (contact@example.com)"
 )
 
 

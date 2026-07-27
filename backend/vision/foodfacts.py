@@ -179,7 +179,7 @@ def _fdc_search(query: str) -> dict | None:
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={"Content-Type": "application/json",
-                 "User-Agent": "hackxperience-vision/0.1"},
+                 "User-Agent": "nutricoach-vision/1.0"},
     )
     try:
         with urllib.request.urlopen(req, timeout=FDC_TIMEOUT_S) as r:

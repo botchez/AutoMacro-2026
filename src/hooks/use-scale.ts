@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 // Live connection to the ESP32/HX711 food scale over Web Serial.
 //
-// The firmware (C:\hackxperience\firmware\scale\scale.ino) streams one weight
+// The firmware (hardware_src/scale/scale.ino) streams one weight
 // reading per line at 115200 baud (~10/sec) and accepts single-char commands:
 //   t          tare (replies "tared")
 //   f<number>  set calibration factor
