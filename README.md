@@ -1,5 +1,9 @@
 # NutriCoach
 
+> 🏆 **Winner, Care Forward track** at
+> [HackXperience 2026](https://hackxperience2026.simitclub.com/), a 24-hour agentic
+> sprint hosted by the SIM IT Club, 24-25 July 2026.
+
 Point a camera at a plate, put it on a load cell, and get an accurate macro log.
 Then get coached on what to eat next.
 
@@ -112,8 +116,8 @@ Vite 8, TypeScript.
 ## Quick start
 
 ```powershell
-git clone https://github.com/botchez/AutoMacro-2026.git
-cd AutoMacro-2026
+git clone https://github.com/botchez/NutriCoach.git
+cd NutriCoach
 copy .env.example .env    # then add your OPENROUTER_API_KEY
 .\run.ps1
 ```
