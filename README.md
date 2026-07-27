@@ -37,11 +37,11 @@ The app is fully usable without the scale; type the grams instead.
 
 Cheapest check first, and it always returns a list of components:
 
-| Step                   | What runs                                        | Cost   |
-| ---------------------- | ------------------------------------------------ | ------ |
-| 1. Image cache         | SQLite lookup by image sha256                    | free   |
-| 2. Barcode decode      | pyzbar, classical CV, local → Open Food Facts   | free   |
-| 3. One multimodal call | classifies the frame*and* decomposes the plate | 1 call |
+| Step | What runs | Cost |
+| --- | --- | --- |
+| 1. Image cache | SQLite lookup by image sha256 | free |
+| 2. Barcode decode | pyzbar, classical CV, local → Open Food Facts | free |
+| 3. One multimodal call | classifies the frame *and* decomposes the plate | 1 call |
 
 The single model call self-routes, so there is no single-item-vs-plate switch:
 
@@ -80,10 +80,10 @@ Suggestions land in a sidebar and can be logged through a quick portion modal.
 Both stages run through a **single OpenRouter key**: one client, one endpoint, and
 only the model slug differs.
 
-| Stage  | Default model                  | Requirement                        |
-| ------ | ------------------------------ | ---------------------------------- |
-| Vision | `google/gemma-4-31b-it`      | must be**multimodal**        |
-| Coach  | `deepseek/deepseek-v4-flash` | must support**tool calling** |
+| Stage | Default model | Requirement |
+| --- | --- | --- |
+| Vision | `google/gemma-4-31b-it` | must be **multimodal** |
+| Coach | `deepseek/deepseek-v4-flash` | must support **tool calling** |
 
 Override either with `VISION_MODEL` / `COACH_MODEL`. Vision calls are pinned to the
 fastest upstream provider via OpenRouter's `throughput` routing, and the image is
@@ -148,12 +148,12 @@ API docs are at `/api/docs`. The seeded demo login is
 
 Copy `.env.example` to `.env`. Nothing is required to boot:
 
-| Variable                                  | Effect if unset                                                                                              |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `OPENROUTER_API_KEY`                    | Vision falls back to a deterministic filename match;**the coach returns 502**                          |
+| Variable | Effect if unset |
+| --- | --- |
+| `OPENROUTER_API_KEY` | Vision falls back to a deterministic filename match; **the coach returns 502** |
 | `USDA_FDC_API_KEY` (or `FDC_API_KEY`) | Generic ingredients lose authoritative USDA macros ([free key](https://fdc.nal.usda.gov/api-key-signup.html)) |
-| `COACH_AGENT_ENABLED`                   | On by default; set`0` to switch the coach's model calls off without touching vision                        |
-| `OFF_USER_AGENT`                        | Open Food Facts asks for`AppName/Version (contact)` on reads, so set your own contact if you fork this     |
+| `COACH_AGENT_ENABLED` | On by default; set `0` to switch the coach's model calls off without touching vision |
+| `OFF_USER_AGENT` | Open Food Facts asks for `AppName/Version (contact)` on reads, so set your own contact if you fork this |
 
 ---
 
